@@ -31,8 +31,20 @@ byte CONTROLLINO_MAC[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 };
 //==============================================================================
 
 //==============================================================================
-//  EDIT ME - per-motor velocity / accel / decel / homing speed
+//  EDIT ME - velocity / accel / decel / homing speed
 //==============================================================================
+// Pick ONE mode:
+//   false = GLOBAL   - every motor uses the same GLOBAL_* values below.
+//   true  = PER-MOTOR - each motor uses its own row in the MOTOR[] table.
+const bool PER_MOTOR_SETTINGS = false;
+
+// ---- GLOBAL mode (used when PER_MOTOR_SETTINGS = false) --------------------
+float GLOBAL_ACCEL      = 0.5;   // rps/s
+float GLOBAL_DECEL      = 0.5;   // rps/s
+float GLOBAL_VELOCITY   = 0.3;   // rps
+float GLOBAL_HOMING_VEL = 0.3;   // rps
+
+// ---- PER-MOTOR mode (used when PER_MOTOR_SETTINGS = true) ------------------
 // One row per motor, in order (row 0 = motor 1, row 1 = motor 2, ...).
 // velocity/homingVel in rps (decimals OK), accel/decel in rps/s. These are
 // hardcoded values: they're re-applied on every boot and whenever a drive
@@ -63,11 +75,15 @@ void setup() {
 
   jmc.setMotorCount(MOTOR_COUNT);      // drives with slave IDs 1..MOTOR_COUNT (up to 32)
 
-  for (uint8_t i = 0; i < MOTOR_COUNT; i++) {
-    uint8_t id = i + 1;                // motor IDs are 1-based
-    jmc.setMotorVelocity(id, MOTOR[i].velocity);
-    jmc.setMotorAccelDecel(id, MOTOR[i].accel, MOTOR[i].decel);
-    jmc.setMotorHomingVelocity(id, MOTOR[i].homingVel);
+  if (PER_MOTOR_SETTINGS) {
+    for (uint8_t i = 0; i < MOTOR_COUNT; i++) {
+      uint8_t id = i + 1;              // motor IDs are 1-based
+      jmc.setMotorVelocity(id, MOTOR[i].velocity);
+      jmc.setMotorAccelDecel(id, MOTOR[i].accel, MOTOR[i].decel);
+      jmc.setMotorHomingVelocity(id, MOTOR[i].homingVel);
+    }
+  } else {
+    jmc.setMotionDefaults(GLOBAL_ACCEL, GLOBAL_DECEL, GLOBAL_VELOCITY, GLOBAL_HOMING_VEL);
   }
 
   // jmc.setMotorHomingOffset(1, 1000); // optional: steps past sensor, per motor
