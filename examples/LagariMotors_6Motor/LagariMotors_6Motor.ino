@@ -9,7 +9,8 @@
 
   Networking is fixed/static - no pairing, no auto-discovery. Edit the
   block below for your network; every reply and event this controller
-  sends goes to PC_IP:PC_PORT, permanently.
+  sends goes to PC_IP:PC_PORT, permanently. On boot, once the drives are
+  initialised, it sends "Motor ready" to that address.
 */
 #include <LagariMotors.h>
 
@@ -65,6 +66,21 @@ MotorSettings MOTOR[MOTOR_COUNT] = {
 //==============================================================================
 
 JMCController jmc;                     // uses Serial3 (Controllino RS-485)
+
+/*  UDP COMMANDS - send one per packet to CONTROLLINO_IP:CONTROLLINO_PORT;
+    replies + events return to PC_IP:PC_PORT. Full reference: extras/PROTOCOL.md.
+      P:1000,,3000   absolute move: M1->1000, skip M2, M3->3000 (synchronised)
+      PR:-1000       relative move ;  PA:5000 all motors ;  P:? / PA:? read pos
+      V:0.5          speed (rps) ;  AD:0.2 accel+decel (rps/s)
+      VS             run continuously (endless) ;  stop with B
+      B              controlled stop, all ;  B3: immediate stop, all
+      B2:1,,1        fast-brake M1 and M3 (positional slots, like P: empty=skip)
+      L              loosen brakes ;  BS brake status
+      Z / ZO:5000    current position -> 0 / -> 5000 (no movement)
+      HV:0.3 HO:1000 H3   homing: speed, offset, home ;  H3:1,,1 = M1 and M3
+      S / SD         status (raw / human-readable)
+      R / I / X      alarm reset / re-detect motors / reboot controller
+      MC:? / MC:8    read / set active motor count at runtime                   */
 
 void setup() {
   Serial.begin(115200);

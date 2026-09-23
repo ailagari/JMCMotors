@@ -21,7 +21,7 @@
     void setup() {
       jmc.setStationId(1);                   // derives MAC + IP (192.168.1.101)
       jmc.setMotorCount(6);                  // slave IDs 1..6
-      jmc.begin();                           // bus + Ethernet + motors + READY
+      jmc.begin();                           // bus + Ethernet + motors, sends "Motor ready"
     }
 
     void loop() { jmc.run(); }               // non-blocking: commands + monitor
@@ -334,7 +334,7 @@ class JMCController {
 
     // ---- Lifecycle ----------------------------------------------------------
     // Brings up RS-485 (Controllino mode), Ethernet/UDP and all motors.
-    // Sends "READY:n/count" to the PC. Returns the number of motors found.
+    // Sends "Motor ready" to the PC when init is done. Returns motors found.
     uint8_t begin(uint32_t baud = 115200);
 
     // Call from loop(). Never blocks: processes one UDP command if pending,
@@ -441,7 +441,7 @@ class JMCController {
     void sendHumanStatus(int i);
     void sendDetailStatus(int i);
     String compactStatus(int i);
-    void handleBrake(const String& args);
+    void handleBrake(const String& head, const String& args);
     void handleLoosen(const String& args);
     void handleBrakeStatus();
     void handleZero(const String& args);

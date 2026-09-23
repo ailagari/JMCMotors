@@ -1,7 +1,5 @@
 # LagariMotors
 
-*Internal beta build - name and package are a placeholder for team testing.*
-
 **Control up to 32 integrated servo/stepper drives from a Controllino with
 plain UDP text commands.**
 
@@ -56,7 +54,8 @@ right below the network block — one row per motor.
 Any UDP tool (SocketTest, ncat, your own app) pointed at
 `CONTROLLINO_IP:CONTROLLINO_PORT` works. One command per UDP packet, plain
 text, no terminator needed. Replies and events come back to whatever
-`PC_IP:PC_PORT` you configured in the sketch.
+`PC_IP:PC_PORT` you configured in the sketch. On boot, once the drives are
+initialised, the controller sends `Motor ready` to that address.
 
 ## 5. Everyday commands
 
@@ -66,10 +65,12 @@ text, no terminator needed. Replies and events come back to whatever
 | `PR:-1000` | relative move: M1 back 1000 steps from wherever it is | `OK` |
 | `PA:?` | read all positions | `M1=…,M2=…` |
 | `SD` | detailed human-readable status, all motors | report |
-| `B` / `B:3` | stop all: controlled / immediate | confirmation |
+| `B` / `B3:` | stop all: controlled / immediate | confirmation |
+| `B:,1` / `B2:1,,1` | stop one/some: motor 2 / fast-brake M1+M3 (positional slots, like `P`) | confirmation |
 | `V:0.5` / `AD:0.2` | run speed (rps) / accel+decel (rps/s) | confirmation |
 | `Z` / `ZO:5000` | set current position = 0 / = 5000 (no movement) | confirmation |
 | `HV:0.3` → `HO:1000` → `H3` | typical homing: speed → offset → home | confirmation |
+| `H3:1,,1` | home only motors 1 and 3 (positional slots; `H3` = all) | confirmation |
 | `L` | loosen brakes | confirmation |
 | `R` / `I` / `X` | alarm reset / re-detect motors / reboot controller | reports |
 | `MC:2` / `MC:?` | change/read active motor count at runtime | `MC: …` |
@@ -110,5 +111,6 @@ whenever a drive comes back online.
 **Author:** LAGARI A — lagariscience@gmail.com · **License:** MIT ·
 **Repo:** https://github.com/ailagari/LagariMotors
 
-**Status:** internal beta under test with the team. Once verified, this will
-be re-released under its real name.
+**Status:** stable, MIT-licensed. Verified against the JMC Modbus-RTU manual
+V2.2 and the IHSS60-R/RC datasheet, and bench-tested on real hardware. Issues
+and pull requests welcome.

@@ -44,18 +44,24 @@ jmc.setNetwork(mac,
 PC and controller must be able to reach each other directly (same subnet, or
 routed) since there is no broadcast discovery to fall back on.
 
-On boot the controller sends a one-off status message to the configured PC:
+On boot, once initialisation is done, the controller sends a one-off message to
+the configured PC:
 
 ```
-JMC_READY:1:6/6    ← stationId : detected/configured motors
+Motor ready
 ```
+
+Detailed detection counts are available on demand with the `I` command.
 
 ### Field conventions
 
 - Commands are `HEAD:arguments`. Arguments are comma-separated.
-- **Positional fields** (P, ZO, H selections, SD/P queries): the 1st field is
+- **Positional fields** (P, ZO, HO, B, H, SD/P queries): the 1st field is
   motor 1, the 2nd motor 2, … An **empty field skips that motor**:
-  `P:1000,,3000` moves M1 and M3, leaves M2 alone.
+  `P:1000,,3000` moves M1 and M3, leaves M2 alone. For P/ZO/HO the field is the
+  per-motor **value** (position, offset); for B/H it is just a **flag** — any
+  non-empty field selects that motor (`B2:1,,1` fast-brakes M1 and M3). Empty
+  argument (or `all`) = every motor.
 - **ID lists** (L, Z, R): motor numbers, e.g. `L:1,3`, or `all`, or empty = all.
 - Units: speed **rps** (rev/s, decimals OK, resolution 0.1), accel/decel
   **rps/s** (resolution 0.1), position **encoder steps** (steps/rev = drive
@@ -178,14 +184,38 @@ parameter **P19 = 7** (speed smoothness, set on the drive panel).
 
 ## 3. Stopping
 
-### `B` — brake / stop
+Syntax: `B<type>:<flags>` — the **stop type is attached to the letter** (exactly
+like `H<method>`), and motor selection is **positional**, like `P`: field N =
+motor N, a non-empty field selects it, an empty field skips it. Empty argument
+(or `all`) = every motor.
+
+Types: bare `B` (or `B0`) = controlled stop on the deceleration ramp;
+`B1` = quick stop on the deceleration ramp; `B2` = fast brake (quick-stop ramp
+0x6085); `B3` = immediate stop.
+
+**All motors** (empty field list):
 
 | Send | Effect | Reply |
 |---|---|---|
 | `B` | controlled stop, normal deceleration ramp | `All motors stopped with deceleration` |
-| `B:1` | quick stop on the deceleration ramp | `Deceleration brake applied to all motors` |
-| `B:2` | fast brake (quick-stop ramp 0x6085) | `Fast brake applied to all motors` |
-| `B:3` | immediate stop | `Immediate brake applied to all motors` |
+| `B1:` | quick stop on the deceleration ramp | `Deceleration brake applied to all motors` |
+| `B2:` | fast brake (quick-stop ramp 0x6085) | `Fast brake applied to all motors` |
+| `B3:` | immediate stop | `Immediate brake applied to all motors` |
+
+**Individual motors** (positional flags — non-empty selects, empty skips):
+
+| Send | Effect | Reply |
+|---|---|---|
+| `B:,1` | controlled stop of motor 2 only | `Motor 2 stopped with deceleration` |
+| `B1:1,,1` | deceleration brake, motors 1 and 3 | `Deceleration brake applied to motor 1,3` |
+| `B2:1,,1` | fast brake motors 1 and 3 | `Fast brake applied to motor 1,3` |
+| `B3:,1` | immediate stop, motor 2 | `Immediate brake applied to motor 2` |
+| `B3:all` | immediate stop, all motors | `Immediate brake applied to all motors` |
+
+The flag value itself is ignored — `1`, `x`, anything non-empty selects the
+motor in that slot. So `B2:1,,1` is M1 + M3 (slot 2 empty skips M2), matching
+`P:1000,,3000`. Out-of-range type → `ERR:B type is B, B1, B2 or B3`;
+no motors selected → `ERR:B no motors selected (e.g. B2:1,,1)`.
 
 ### `L` — loosen brakes
 
@@ -258,7 +288,14 @@ homing and drive re-initialisation**.
 | Send | Effect | Reply |
 |---|---|---|
 | `H1` | home ALL motors with method 1 | `Homing method 1 started for all motors` |
-| `H3:1,,1` | home M1 and M3 with method 3 (positional flags) | `Homing method 3 started for M1,3` |
+| `H3:1,,1` | home motors 1 and 3 with method 3 (positional flags) | `Homing method 3 started for M1,3` |
+| `H3:,1` | home motor 2 only | `Homing method 3 started for M2` |
+| `H3:all` | home all motors with method 3 | `Homing method 3 started for all motors` |
+
+Motor selection is **positional**, exactly like `P`: field N = motor N, a
+non-empty field selects it (the value is just a flag), an empty field skips it.
+So `H3:1,,1` homes motors 1 and 3; empty or `all` homes every motor. Each
+selected motor re-applies its stored `HO` offset first.
 
 Method summary (see the JMC manual for diagrams): 1/2 = to CW/CCW limit,
 3/4 = to origin switch via CW/CCW, 5–12 = fast variants with back-off.
@@ -360,8 +397,9 @@ Not persistent — the sketch's `setMotorCount()` applies after reboot.
 
 ### `X` — reboot the controller
 
-Reply `System restart initiated...`, then the controller reboots and sends a
-fresh broadcast `JMC_READY:<stationId>:<ip>:n/m`.
+Reply `System restart initiated...`, then the controller reboots and, once it
+has re-initialised, sends a fresh `Motor ready` to the configured PC (identical
+to the boot message in section 1).
 
 ---
 
@@ -433,6 +471,6 @@ H3                    home (method 3: origin switch via CW)
 ZS                    confirm
 
 # Emergency
-B:3                   immediate stop, all motors
+B3:                   immediate stop, all motors
 R                     clear faults + re-initialise
 ```

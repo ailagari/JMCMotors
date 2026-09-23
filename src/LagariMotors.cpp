@@ -698,8 +698,8 @@ uint8_t JMCController::begin(uint32_t baud) {
       Serial.println(JMCBus::resultName(_m[i]->lastResult()));
     }
   }
-  // Tell the configured PC we're up.
-  reply("JMC_READY:" + String(_stationId) + ":" + String(found) + "/" + String(_count));
+  // Tell the configured PC initialisation is done and the motors are up.
+  reply("Motor ready");
   return found;
 }
 
@@ -840,7 +840,9 @@ void JMCController::handleUdp() {
   else if (head == "P")  handlePosition(args, true);
   else if (head == "V")  handleVelocity(args);
   else if (head == "S")  handleStatus(args);
-  else if (head == "B")  handleBrake(args);
+  else if (head == "B")  handleBrake("B", args);              // bare B = controlled stop
+  else if (head.startsWith("B") && head.length() > 1 && isDigit(head[1]))
+                         handleBrake(head, args);             // B1/B2/B3 (positional flags after ':')
   else if (head == "L")  handleLoosen(args);
   else if (head == "Z")  handleZero(args);
   else if (head == "R")  handleReset(args);
@@ -1388,24 +1390,55 @@ void JMCController::handleStatusDetail(const String& args) {
 }
 
 // ---- B : brakes -----------------------------------------------------------------
-void JMCController::handleBrake(const String& args) {
+// B<type>[:flags] - stop motors. The type is attached to the letter, exactly
+// like H<method>:  B1 decel quick-stop, B2 fast, B3 immediate; bare B (or B0)
+// is the gentle controlled stop on the decel ramp. Motor selection is
+// POSITIONAL, like P: field N = motor N, a non-empty field selects it, an empty
+// field skips it; empty (or 'all') = every motor.
+//   B1:         deceleration brake, ALL motors
+//   B2:1,,1     fast brake motors 1 and 3   (slot 2 empty = skip M2)
+//   B3:,1       immediate stop, motor 2 only
+//   B / B:1,,1  controlled stop: all / motors 1 and 3
+void JMCController::handleBrake(const String& head, const String& args) {
+  int type = (head.length() > 1) ? head.substring(1).toInt() : 0;
+  if (type < 0 || type > 3) { reply("ERR:B type is B, B1, B2 or B3"); return; }
+
+  // Motor selection is POSITIONAL, like P: field N = motor N, non-empty selects,
+  // empty skips. Empty arg (or 'all') = every motor.
+  bool sel[JMC_MAX_MOTORS];
+  int  n;
   String a = args; a.trim();
-  int type = a.toInt();                     // "" -> 0
+  if (!a.length() || a.equalsIgnoreCase("all")) {
+    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
+    n = _count;
+  } else {
+    long v[JMC_MAX_MOTORS];
+    n = parseFields(a, v, sel);             // positional flags -> active motors
+    if (n == 0) { reply("ERR:B no motors selected (e.g. B2:1,,1)"); return; }
+  }
 
   // Stop wins over a move that is still waiting for the jog to brake: drop it
   // before halting, or it would launch a moment later.
   cancelPendingMove();
 
+  String list = "";
   for (uint8_t i = 0; i < _count; i++) {
+    if (!sel[i]) continue;
     if      (type == 1) _m[i]->quickStop(JMCMotor::QUICK_STOP_DECEL);
     else if (type == 2) _m[i]->quickStop(JMCMotor::QUICK_STOP_FAST);
     else if (type == 3) _m[i]->quickStop(JMCMotor::QUICK_STOP_IMMEDIATE);
     else                _m[i]->stop();
+    if (list.length()) list += ",";
+    list += String(i + 1);
   }
-  if      (type == 1) reply("Deceleration brake applied to all motors");
-  else if (type == 2) reply("Fast brake applied to all motors");
-  else if (type == 3) reply("Immediate brake applied to all motors");
-  else                reply("All motors stopped with deceleration");
+
+  bool all = (n == (int)_count);
+  String tgt = all ? "all motors" : ("motor " + list);
+  if      (type == 1) reply("Deceleration brake applied to " + tgt);
+  else if (type == 2) reply("Fast brake applied to " + tgt);
+  else if (type == 3) reply("Immediate brake applied to " + tgt);
+  else if (all)       reply("All motors stopped with deceleration");
+  else                reply("Motor " + list + " stopped with deceleration");
 }
 
 // ---- L : loosen brakes -------------------------------------------------------------
@@ -1725,13 +1758,17 @@ void JMCController::handleVelocity(const String& args) {
     return;
   }
 
-  String work = s + ","; int start = 0; String out = "Set V: ";
+  String work = s + ","; int start = 0; String out = "Set V: "; bool first = true;
   for (uint8_t i = 0; i < _count; i++) {
-    if (i) out += ",";
     int comma = work.indexOf(',', start);
-    if (comma < 0) continue;
+    if (comma < 0) break;
     String part = work.substring(start, comma); part.trim();
-    if (part.length()) { _storedVel[i] = part.toFloat(); out += String(_storedVel[i]); }
+    if (part.length()) {
+      _storedVel[i] = part.toFloat();
+      if (!first) out += ",";
+      out += String(_storedVel[i]);
+      first = false;
+    }
     start = comma + 1;
   }
   reply(out);
@@ -1769,18 +1806,19 @@ void JMCController::handleHomingVelocity(const String& args) {
     reply("Set Motor 1 HV: " + String(v));
     return;
   }
-  String work = s + ","; int start = 0; String out = "Set HV: ";
+  String work = s + ","; int start = 0; String out = "Set HV: "; bool first = true;
   for (uint8_t i = 0; i < _count; i++) {
-    if (i) out += ",";
     int comma = work.indexOf(',', start);
-    if (comma < 0) continue;
+    if (comma < 0) break;
     String part = work.substring(start, comma); part.trim();
     if (part.length()) {
       float v = part.toFloat();
       _homingVel[i] = v;
       _m[i]->setHomingVelocity(v);
       _m[i]->setHomingZeroVelocity(v);
+      if (!first) out += ",";
       out += part;
+      first = false;
     }
     start = comma + 1;
   }
@@ -1837,32 +1875,36 @@ void JMCController::handleHomingOffset(const String& args) {
   reply(out + " steps after sensor (used at next homing)");
 }
 
+// H<method>[:flags] - start homing on all motors, or a selected subset.
+// Selection is POSITIONAL, like P: field N = motor N, a non-empty field selects
+// it, an empty field skips it; empty (or 'all') = every motor. So H3:1,,1 homes
+// motors 1 and 3. Each selected motor re-applies its stored HO offset, and a
+// running jog is braked to standstill first (rampDownSelected).
 void JMCController::handleHoming(const String& head, const String& args) {
   int method = head.substring(1).toInt();
   if (method < 1 || method > 12) { reply("ERR:homing method H1..H12"); return; }
 
-  if (!args.length()) {
-    bool all[JMC_MAX_MOTORS];
-    for (uint8_t i = 0; i < _count; i++) all[i] = true;
-    rampDownSelected(all);                        // jog running? brake, don't slam
-    for (uint8_t i = 0; i < _count; i++) {
-      _m[i]->setHomingOffset(_homingOffset[i]);   // re-apply stored HO offset
-      _m[i]->performHoming(method);
-    }
-    reply("Homing method " + String(method) + " started for all motors");
-    return;
+  bool sel[JMC_MAX_MOTORS];
+  int  n;
+  String a = args; a.trim();
+  if (!a.length() || a.equalsIgnoreCase("all")) {
+    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
+    n = _count;
+  } else {
+    long v[JMC_MAX_MOTORS];
+    n = parseFields(a, v, sel);                   // positional flags -> active motors
+    if (n == 0) { reply("ERR:H no motors selected (e.g. H3:1,,1)"); return; }
   }
-  long v[JMC_MAX_MOTORS]; bool active[JMC_MAX_MOTORS];
-  parseFields(args, v, active);
-  rampDownSelected(active);
+
+  rampDownSelected(sel);                          // jog running? brake, don't slam
   String list = "";
   for (uint8_t i = 0; i < _count; i++) {
-    if (!active[i]) continue;
+    if (!sel[i]) continue;
     _m[i]->setHomingOffset(_homingOffset[i]);     // re-apply stored HO offset
     _m[i]->performHoming(method);
     if (list.length()) list += ",";
     list += String(i + 1);
   }
-  if (list.length()) reply("Homing method " + String(method) + " started for M" + list);
-  else               reply("ERR:no motors selected");
+  if (n == (int)_count) reply("Homing method " + String(method) + " started for all motors");
+  else                  reply("Homing method " + String(method) + " started for M" + list);
 }

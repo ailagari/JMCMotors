@@ -1,0 +1,10 @@
+# Local reference material — not part of the published library
+refer docs/
+
+# Build / IDE / OS artifacts
+build/
+*.hex
+*.elf
+.vscode/
+.DS_Store
+Thumbs.db
