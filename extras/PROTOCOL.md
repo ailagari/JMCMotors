@@ -56,13 +56,14 @@ Detailed detection counts are available on demand with the `I` command.
 ### Field conventions
 
 - Commands are `HEAD:arguments`. Arguments are comma-separated.
-- **Positional fields** (P, ZO, HO, B, H, SD/P queries): the 1st field is
-  motor 1, the 2nd motor 2, … An **empty field skips that motor**:
-  `P:1000,,3000` moves M1 and M3, leaves M2 alone. For P/ZO/HO the field is the
-  per-motor **value** (position, offset); for B/H it is just a **flag** — any
-  non-empty field selects that motor (`B2:1,,1` fast-brakes M1 and M3). Empty
-  argument (or `all`) = every motor.
-- **ID lists** (L, Z, R): motor numbers, e.g. `L:1,3`, or `all`, or empty = all.
+- **Positional fields — every motor-addressing command** (P, PR, ZO, HO, B, H,
+  L, Z, R, SD/P queries): the 1st field is motor 1, the 2nd motor 2, … An
+  **empty field skips that motor**: `P:1000,,3000` moves M1 and M3, leaves M2
+  alone. For P/PR/ZO/HO the field carries a per-motor **value** (position,
+  offset); for B/H/L/Z/R it is just a **flag** — any non-empty field selects
+  that motor (`L:1,,1` loosens M1 and M3). Empty argument (or `all`) = every
+  motor. So `L:2` is **not** "motor 2" — it selects motor 1 (slot 1, value
+  ignored); write `L:,1` for motor 2, matching `P`.
 - Units: speed **rps** (rev/s, decimals OK, resolution 0.1), accel/decel
   **rps/s** (resolution 0.1), position **encoder steps** (steps/rev = drive
   P17; signed 32-bit, ±2,147,483,647).
@@ -222,8 +223,11 @@ no motors selected → `ERR:B no motors selected (e.g. B2:1,,1)`.
 | Send | Effect | Reply |
 |---|---|---|
 | `L` or `L:all` | release brakes, all motors | `All motor brakes loosened` |
-| `L:2` | motor 2 only | `Motor 2 brake loosened` |
-| `L:1,3` | motors 1 and 3 | `Motor 1,3 brake loosened` |
+| `L:,1` | motor 2 only (positional: slot 2 filled) | `Motor 2 brake loosened` |
+| `L:1,,1` | motors 1 and 3 | `Motor 1,3 brake loosened` |
+
+Selection is **positional**, like `P` (see §1 field conventions) — a non-empty
+field selects that motor, empty skips.
 
 Note: loosening the brake also disables motor torque (drive control word
 0x0003). The next move re-enables automatically.
@@ -245,7 +249,8 @@ Per motor `BRAKE|FREE` / `RUN|STOP`; summary `BRAKED`, `FREE`, `MIXED` or `ERROR
 | Send | Effect | Reply |
 |---|---|---|
 | `Z` or `Z:all` | zero all motors where they stand | `All motors set to zero position` |
-| `Z:1,2` | motors 1+2 | `Motor 1,2 set to zero position` |
+| `Z:1,1` | motors 1+2 (positional flags) | `Motor 1,2 set to zero position` |
+| `Z:1,,1` | motors 1+3 | `Motor 1,3 set to zero position` |
 
 ### `ZO` — current position becomes a value (no movement)
 
@@ -384,7 +389,7 @@ Total motors detected: 1 of 6
 | Send | Reply |
 |---|---|
 | `R` or `R:all` | `All motors reset complete` |
-| `R:2` | `Motor 2 reset complete` (failure: `Motor 2(FAIL) reset complete`) |
+| `R:,1` | motor 2 only (positional) — `Motor 2 reset complete` (failure: `Motor 2(FAIL) reset complete`) |
 
 ### `MC` — motor count at runtime
 

@@ -57,23 +57,74 @@ text, no terminator needed. Replies and events come back to whatever
 `PC_IP:PC_PORT` you configured in the sketch. On boot, once the drives are
 initialised, the controller sends `Motor ready` to that address.
 
-## 5. Everyday commands
+## 5. Command set
 
-| Command | Action | Reply |
-|---|---|---|
-| `P:1000,2000` | move M1→1000, M2→2000 (absolute, synchronised; blank = skip motor) | `OK` |
-| `PR:-1000` | relative move: M1 back 1000 steps from wherever it is | `OK` |
-| `PA:?` | read all positions | `M1=…,M2=…` |
-| `SD` | detailed human-readable status, all motors | report |
-| `B` / `B3:` | stop all: controlled / immediate | confirmation |
-| `B:,1` / `B2:1,,1` | stop one/some: motor 2 / fast-brake M1+M3 (positional slots, like `P`) | confirmation |
-| `V:0.5` / `AD:0.2` | run speed (rps) / accel+decel (rps/s) | confirmation |
-| `Z` / `ZO:5000` | set current position = 0 / = 5000 (no movement) | confirmation |
-| `HV:0.3` → `HO:1000` → `H3` | typical homing: speed → offset → home | confirmation |
-| `H3:1,,1` | home only motors 1 and 3 (positional slots; `H3` = all) | confirmation |
-| `L` | loosen brakes | confirmation |
-| `R` / `I` / `X` | alarm reset / re-detect motors / reboot controller | reports |
-| `MC:2` / `MC:?` | change/read active motor count at runtime | `MC: …` |
+One command per UDP packet, plain text; arguments follow the colon. **Every
+motor-addressing command uses the same positional slots** (like `P`): field N =
+motor N, an empty field skips that motor, an empty argument (or `all`) = every
+motor — so `1,,1` = motors 1 and 3. For `P`/`PR`/`V`/`ZO`/`HO` the field is a
+per-motor **value**; for `B`/`H`/`L`/`Z`/`R` it is just a **selector** (so
+`L:,1` = motor 2, not `L:2`). Units: speed **rps**, accel/decel **rps/s**,
+position **encoder steps** (signed 32-bit).
+
+**Motion**
+
+| Command | Action |
+|---|---|
+| `P:1000,,3000` | absolute move — M1→1000, skip M2, M3→3000 (synchronised) |
+| `PR:-1000,,500` | relative move — delta from each motor's current position |
+| `PA:5000` | all motors → 5000, broadcast simultaneous start |
+| `P:?` · `P:,,?` · `PA:?` | read position — M1 · M3 · all motors |
+
+**Speed & ramps** (runtime; lost on power-off — hardcode in the sketch to keep)
+
+| Command | Action |
+|---|---|
+| `V:0.5,,0.3` | run speed per motor (rps) · `V:?` reads stored speeds |
+| `VA:1` | set every motor's speed at once (broadcast) |
+| `VS` | start velocity mode (endless rotation); stop with `B` |
+| `AD:0.2` · `AD:0.3,0.1` | accel=decel · accel,decel (rps/s), all motors · `AD:?` reads |
+
+**Stopping**
+
+| Command | Action |
+|---|---|
+| `B` (or `B0`) | controlled stop on the decel ramp, all motors |
+| `B1:` · `B2:` · `B3:` | decel quick-stop · fast brake · immediate, all motors |
+| `B2:1,,1` | same types, selected motors — here fast-brake M1 and M3 |
+| `L` · `L:1,,1` | loosen brakes (releases torque) — all · motors 1 and 3 |
+| `BS` | brake status per motor |
+
+**Zero & homing**
+
+| Command | Action |
+|---|---|
+| `Z` · `Z:1,,1` | set current position = 0 (no move) — all · motors 1 and 3 |
+| `ZO:10000,,500` | set current position = value (no move) — M1=10000, M3=500 |
+| `ZS` | zero status |
+| `HV:0.3` · `HV:0.3,0.5` | homing speed (rps) — all · per motor |
+| `HO:1000,,-800` | steps to travel past the origin sensor (sign = direction) · `HO:?` reads |
+| `H3` · `H3:1,,1` | start homing, method 1–12 — all · motors 1 and 3 |
+
+**Status & diagnostics**
+
+| Command | Action |
+|---|---|
+| `S:0` · `S:1,COMPACT` | status word (formats: RAW COMPACT STATE BITS FLAGS DETAIL) |
+| `SD` · `SD:,,?` | detailed human-readable status — all · motor 3 |
+| `DG:1` | low-level register dump for one motor ("replies OK but won't move") |
+
+**Administration**
+
+| Command | Action |
+|---|---|
+| `I` | detect + initialise all motors |
+| `R` · `R:1,,1` | alarm reset + re-init — all · motors 1 and 3 |
+| `MC:?` · `MC:8` | read · set active motor count (1–32) at runtime |
+| `X` | reboot the controller |
+
+On boot the controller sends `Motor ready`; all replies and events go to the
+configured `PC_IP:PC_PORT`.
 
 The controller also **pushes events without being asked** — limit switches,
 drive faults (decoded), drives going offline/online:

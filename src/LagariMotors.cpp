@@ -775,26 +775,19 @@ int JMCController::parseFields(const String& csv, long* value, bool* active) {
   return count;
 }
 
-// Parse an ID list ("1,3", "all", "" = all): sel[] per motor. Returns count.
-int JMCController::parseIdList(const String& csv, bool* sel) {
-  for (uint8_t i = 0; i < _count; i++) sel[i] = false;
+// Positional motor selection shared by B, H, L, Z, R - the same convention as P:
+// field N = motor N, a non-empty field selects it, an empty field skips it.
+// Empty argument (or "all") = every motor. Returns the count selected (0 = none).
+// The field value itself is ignored (it is a flag, not a number), so "1,,1"
+// picks motors 1 and 3 exactly like P:1000,,3000.
+int JMCController::parseSelection(const String& csv, bool* sel) {
   String s = csv; s.trim();
   if (s.length() == 0 || s.equalsIgnoreCase("all")) {
     for (uint8_t i = 0; i < _count; i++) sel[i] = true;
     return _count;
   }
-  int count = 0;
-  String work = s + ",";
-  int start = 0;
-  while (start < (int)work.length()) {
-    int comma = work.indexOf(',', start);
-    if (comma < 0) break;
-    String part = work.substring(start, comma); part.trim();
-    int id = part.toInt();
-    if (id >= 1 && id <= _count && !sel[id - 1]) { sel[id - 1] = true; count++; }
-    start = comma + 1;
-  }
-  return count;
+  long v[JMC_MAX_MOTORS];
+  return parseFields(s, v, sel);          // positional flags -> active motors
 }
 
 //==============================================================================
@@ -1403,19 +1396,9 @@ void JMCController::handleBrake(const String& head, const String& args) {
   int type = (head.length() > 1) ? head.substring(1).toInt() : 0;
   if (type < 0 || type > 3) { reply("ERR:B type is B, B1, B2 or B3"); return; }
 
-  // Motor selection is POSITIONAL, like P: field N = motor N, non-empty selects,
-  // empty skips. Empty arg (or 'all') = every motor.
   bool sel[JMC_MAX_MOTORS];
-  int  n;
-  String a = args; a.trim();
-  if (!a.length() || a.equalsIgnoreCase("all")) {
-    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
-    n = _count;
-  } else {
-    long v[JMC_MAX_MOTORS];
-    n = parseFields(a, v, sel);             // positional flags -> active motors
-    if (n == 0) { reply("ERR:B no motors selected (e.g. B2:1,,1)"); return; }
-  }
+  int  n = parseSelection(args, sel);       // positional selection, like P
+  if (n == 0) { reply("ERR:B no motors selected (e.g. B2:1,,1)"); return; }
 
   // Stop wins over a move that is still waiting for the jog to brake: drop it
   // before halting, or it would launch a moment later.
@@ -1444,8 +1427,8 @@ void JMCController::handleBrake(const String& head, const String& args) {
 // ---- L : loosen brakes -------------------------------------------------------------
 void JMCController::handleLoosen(const String& args) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseIdList(args, sel);
-  if (n == 0) { reply("ERR:L ids 1.." + String(_count) + " or all"); return; }
+  int n = parseSelection(args, sel);        // positional selection, like P
+  if (n == 0) { reply("ERR:L no motors selected (e.g. L:1,,1)"); return; }
 
   String done = "";
   for (uint8_t i = 0; i < _count; i++) {
@@ -1483,8 +1466,8 @@ void JMCController::handleBrakeStatus() {
 // ---- Z : current position becomes 0 ---------------------------------------------------
 void JMCController::handleZero(const String& args) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseIdList(args, sel);
-  if (n == 0) { reply("ERR:Z ids 1.." + String(_count) + " or all"); return; }
+  int n = parseSelection(args, sel);        // positional selection, like P
+  if (n == 0) { reply("ERR:Z no motors selected (e.g. Z:1,,1)"); return; }
 
   rampDownSelected(sel);
   String done = "";
@@ -1556,8 +1539,8 @@ void JMCController::handleZeroStatus() {
 // ---- R : reset ------------------------------------------------------------------------------
 void JMCController::handleReset(const String& args) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseIdList(args, sel);
-  if (n == 0) { reply("ERR:R ids 1.." + String(_count) + " or all"); return; }
+  int n = parseSelection(args, sel);        // positional selection, like P
+  if (n == 0) { reply("ERR:R no motors selected (e.g. R:1,,1)"); return; }
 
   cancelPendingMove();
   String done = "";
@@ -1885,16 +1868,8 @@ void JMCController::handleHoming(const String& head, const String& args) {
   if (method < 1 || method > 12) { reply("ERR:homing method H1..H12"); return; }
 
   bool sel[JMC_MAX_MOTORS];
-  int  n;
-  String a = args; a.trim();
-  if (!a.length() || a.equalsIgnoreCase("all")) {
-    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
-    n = _count;
-  } else {
-    long v[JMC_MAX_MOTORS];
-    n = parseFields(a, v, sel);                   // positional flags -> active motors
-    if (n == 0) { reply("ERR:H no motors selected (e.g. H3:1,,1)"); return; }
-  }
+  int  n = parseSelection(args, sel);             // positional selection, like P
+  if (n == 0) { reply("ERR:H no motors selected (e.g. H3:1,,1)"); return; }
 
   rampDownSelected(sel);                          // jog running? brake, don't slam
   String list = "";

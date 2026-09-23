@@ -411,7 +411,8 @@ class JMCController {
 
     // Parsing helpers
     int  parseFields(const String& csv, long* value, bool* active);
-    int  parseIdList(const String& csv, bool* sel);
+    // Positional motor selection (P-style) shared by B, H, L, Z, R.
+    int  parseSelection(const String& csv, bool* sel);
 
     // Velocity -> position/homing handoff: ramp the selected motors down
     // together on their decel ramps, so no drive gets a dead-stop mode
