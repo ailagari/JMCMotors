@@ -16,17 +16,41 @@ downloaded ZIP of this repository. (Or copy the folder into
 `Documents/Arduino/libraries/`.) Requires the **CONTROLLINO** board package +
 library and the built-in **Ethernet** library.
 
-## 2. Set up the drives (once, on each drive's panel)
+## 2. Set up the motors
+
+Four steps per installation. The full version, with wiring diagram,
+commissioning sequence and a troubleshooting table, is
+**[extras/HARDWARE.md](extras/HARDWARE.md)**.
+
+**2.1 Wire it**
+
+- Motor power to each drive from the motor supply; the Controllino on its own
+  logic supply, with a common ground.
+- RS-485 **A/B daisy-chain** from the Controllino's built-in RS-485 port
+  through every drive, **120 Ω termination across A/B at the last drive**.
+- Limit / origin switches go to the **drive's** inputs, not the Controllino.
+- Ethernet from the Controllino to the PC's switch (static IP, no DHCP).
+
+**2.2 Set the drive parameters** (front panel, once per drive; restart the
+drive afterwards)
 
 | Parameter | Value | Why |
 |---|---|---|
-| **P43** | **0** | RS-485/Modbus mode — **factory default is CANopen and the drive won't answer!** |
-| **P40** | 1, 2, 3… | unique slave ID per drive |
+| **P43** | **0** | RS-485/Modbus mode — **factory default is 1 = CANopen and the drive won't answer!** |
+| **P40** | 1, 2, 3… | unique slave ID = the motor number in every command, consecutive from 1 |
 | **P41** | **7** | 115200 baud |
+| **P42** | 0 / 1 | sensor polarity: 0 = PNP, 1 = NPN (default) — wrong polarity shows as a permanently active limit |
+| **P17** | e.g. 10 (= 4000) | steps per revolution; positions in commands are raw steps, so `P:4000` is one turn only when P17 = 4000 |
+| **P19** | 7 for geared loads | speed smoothness (S-curve); default 2, sometimes found at 0 |
 
-Wire RS-485 A/B as a daisy-chain to all drives (120 Ω termination at the
-last one), Ethernet to the same network as your PC. Full drive-parameter
-guide (smoothness, steps/rev, sensor polarity…): **[extras/HARDWARE.md](extras/HARDWARE.md)**.
+**2.3 Configure the sketch** — motor count, network, and the speed/ramp table
+(section 3 below). Sketch values are re-applied on every boot and whenever a
+drive comes back online; values set over UDP last until reboot.
+
+**2.4 Commission each axis** with the commands in section 5: `I` (all
+detected?) → `PR:4000` (one turn, right direction?) → `V:1` + `VS` for 60 s
+(exactly 60 revs?) → `AD` until the start/stop is smooth → `Z` or `H<n>` to
+set the zero → press each limit switch and watch for `EVENT:LIMIT`.
 
 ## 3. Flash the example
 
@@ -65,13 +89,32 @@ Controllino while listening on `PC_PORT` should show `Motor ready`.
 
 ## 5. Command set
 
-One command per UDP packet, plain text; arguments follow the colon. **Every
-motor-addressing command uses the same positional slots** (like `P`): field N =
-motor N, an empty field skips that motor, an empty argument (or `all`) = every
-motor — so `1,,1` = motors 1 and 3. For `P`/`PR`/`V`/`ZO`/`HO` the field is a
-per-motor **value**; for `B`/`H`/`L`/`Z`/`R` it is just a **selector** (so
-`L:,1` = motor 2, not `L:2`). Units: speed **rps**, accel/decel **rps/s**,
-position **encoder steps** (signed 32-bit).
+One command per UDP packet, plain text, **upper-case head**, arguments after
+the colon. Units: speed **rps**, accel/decel **rps/s**, position **encoder
+steps** (signed 32-bit).
+
+**How commands are shaped.** Every command is one of six shapes; once you
+know the shape you know how its arguments are read.
+
+| Shape | Arguments | Commands |
+|---|---|---|
+| Bare | none — acts on all motors or the controller | `I` `X` `VS` `BS` `ZS` `SD` `B` `L` `Z` `R` |
+| Positional **values** | field N = a value for motor N; empty field = skip; a single value with no comma = motor 1 | `P` `PR` `ZO` `HO` `V` `HV` |
+| Positional **selectors** | field N = a flag for motor N (any text selects, empty skips); empty or `all` = every motor | `B` `B1` `B2` `B3` `L` `Z` `R` `H1`…`H12` |
+| Whole-bus value | one value for all motors | `PA` `VA` `AD` `MC` |
+| Query | `?` in a field reads instead of writes | `P:?` `PA:?` `SD:?` `V:?` `HO:?` `AD:?` `MC:?` |
+| Motor number | the argument is a motor **number** | `S:<n>` `SD:<n>` `DG:<n>` |
+
+So `P:1000,,3000` moves motors 1 and 3, `L:1,,1` loosens motors 1 and 3, and
+`L:,1` (not `L:2`) loosens motor 2.
+
+**What comes back.** `OK` for a launched move; a confirmation sentence for
+settings and stops (`Fast brake applied to motor 1,3`); a data line for
+queries (`M1=10000,M3=200`); multi-line packets for `I`, `SD` and `DG`;
+`WARN: …` when a motor did not answer on RS-485; `ERR:<reason>` when the
+arguments are wrong (nothing was sent to the drives); `INVALID COMMAND` for
+an unknown head. A `P`/`PR`/`PA` sent while motors are jogging (`VS`) answers
+`OK` only once the jog has braked and the move has actually started.
 
 **Motion**
 
@@ -132,17 +175,24 @@ position **encoder steps** (signed 32-bit).
 On boot the controller sends `Motor ready`. Replies go to the sender and to
 `PC_IP:PC_PORT`; events and `Motor ready` go to `PC_IP:PC_PORT` only.
 
-The controller also **pushes events without being asked** — limit switches,
-drive faults (decoded), drives going offline/online:
+**Events — what the controller sends without being asked.** A background
+monitor reads one motor's status every 8 ms and pushes a message to
+`PC_IP:PC_PORT` on every *change* (one message when a condition appears, one
+when it clears):
 
-```
-EVENT:LIMIT:M2:CW POS=48211 ST=0x4677
-EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT
-EVENT:ONLINE:M4 / EVENT:OFFLINE:M4
-```
+| Trigger on the drive | Event | What to do |
+|---|---|---|
+| limit switch pressed / released | `EVENT:LIMIT:M2:CW POS=48211 ST=0x4677` · `EVENT:LIMIT:M2:CW_CLEARED` (same for `CCW`) | back off with `PR`, or re-home |
+| drive fault raised / cleared | `EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT` · `EVENT:FAULT_CLEARED:M3` | `SD` for the decoded cause, fix it, `R:…` |
+| drive stops answering / answers again | `EVENT:OFFLINE:M4` · `EVENT:ONLINE:M4 ST=0x1437 (re-initialised)` | after `ONLINE` the drive was re-initialised automatically, but a power-cycled drive is back at position 0 — re-home or `ZO` |
 
-**Complete reference** — every command's exact syntax, all reply strings,
-formats, status-bit tables, recipes: **[extras/PROTOCOL.md](extras/PROTOCOL.md)**.
+Target reached and homing complete are **not** events: poll `S:n,COMPACT`
+(`TR`) or `S:n,FLAGS` (`HOMED`).
+
+**Complete reference** — every command with its arguments, what it triggers
+on the bus, every reply and error string, the six `S` formats, status-bit and
+error-register tables, and step-by-step recipes:
+**[extras/PROTOCOL.md](extras/PROTOCOL.md)**.
 
 ## Multiple units
 
@@ -159,8 +209,8 @@ whenever a drive comes back online.
 
 | Document | Contents |
 |---|---|
-| [extras/PROTOCOL.md](extras/PROTOCOL.md) | full command/response reference, events, status bits, recipes |
-| [extras/HARDWARE.md](extras/HARDWARE.md) | drive parameters (P17/P19/P42…), wiring, speed-scale verification, 32-motor scaling, position limits |
+| [extras/PROTOCOL.md](extras/PROTOCOL.md) | command grammar and the six command shapes, every command with triggers and replies, events, trigger/response matrix, status bits, error catalogue, recipes |
+| [extras/HARDWARE.md](extras/HARDWARE.md) | parts list, wiring, drive parameters (P17/P19/P40–P43…), slave IDs, sketch configuration, first power-up, per-axis commissioning, 32-motor scaling, position limits, troubleshooting |
 | [src/JMCMotors.h](src/JMCMotors.h) | the three layers (bus / motor / controller) and the direct C++ API for advanced sketches |
 
 ## Author / license / status
