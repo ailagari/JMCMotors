@@ -1,4 +1,4 @@
-# LagariMotors
+# JMCMotors
 
 **Control up to 32 integrated servo/stepper drives from a Controllino with
 plain UDP text commands.**
@@ -30,7 +30,7 @@ guide (smoothness, steps/rev, sensor polarity…): **[extras/HARDWARE.md](extras
 
 ## 3. Flash the example
 
-Open **File → Examples → LagariMotors → LagariMotors_6Motor**. Networking is
+Open **File → Examples → JMCMotors → JMCMotors_6Motor**. Networking is
 fixed/static — no pairing, no auto-discovery. Edit the block near the top:
 
 ```cpp
@@ -53,9 +53,15 @@ right below the network block — one row per motor.
 
 Any UDP tool (SocketTest, ncat, your own app) pointed at
 `CONTROLLINO_IP:CONTROLLINO_PORT` works. One command per UDP packet, plain
-text, no terminator needed. Replies and events come back to whatever
-`PC_IP:PC_PORT` you configured in the sketch. On boot, once the drives are
-initialised, the controller sends `Motor ready` to that address.
+text, no terminator needed. Command replies come straight back to the
+sender (the IP and port your tool sent from) **and** to the configured
+`PC_IP:PC_PORT`; events go only to `PC_IP:PC_PORT`. On boot, once the drives
+are initialised, the controller sends `Motor ready` to `PC_IP:PC_PORT`.
+
+**No replies at all?** Check that `PC_IP` is your PC's actual IP on the
+Controllino's subnet, and allow your UDP tool through Windows Firewall
+(inbound UDP is blocked on networks marked "Public"). Resetting the
+Controllino while listening on `PC_PORT` should show `Motor ready`.
 
 ## 5. Command set
 
@@ -123,8 +129,8 @@ position **encoder steps** (signed 32-bit).
 | `MC:?` · `MC:8` | read · set active motor count (1–32) at runtime |
 | `X` | reboot the controller |
 
-On boot the controller sends `Motor ready`; all replies and events go to the
-configured `PC_IP:PC_PORT`.
+On boot the controller sends `Motor ready`. Replies go to the sender and to
+`PC_IP:PC_PORT`; events and `Motor ready` go to `PC_IP:PC_PORT` only.
 
 The controller also **pushes events without being asked** — limit switches,
 drive faults (decoded), drives going offline/online:
@@ -155,12 +161,12 @@ whenever a drive comes back online.
 |---|---|
 | [extras/PROTOCOL.md](extras/PROTOCOL.md) | full command/response reference, events, status bits, recipes |
 | [extras/HARDWARE.md](extras/HARDWARE.md) | drive parameters (P17/P19/P42…), wiring, speed-scale verification, 32-motor scaling, position limits |
-| [src/LagariMotors.h](src/LagariMotors.h) | the three layers (bus / motor / controller) and the direct C++ API for advanced sketches |
+| [src/JMCMotors.h](src/JMCMotors.h) | the three layers (bus / motor / controller) and the direct C++ API for advanced sketches |
 
 ## Author / license / status
 
 **Author:** LAGARI A — lagariscience@gmail.com · **License:** MIT ·
-**Repo:** https://github.com/ailagari/LagariMotors
+**Repo:** https://github.com/ailagari/JMCMotors
 
 **Status:** stable, MIT-licensed. Verified against the JMC Modbus-RTU manual
 V2.2 and the IHSS60-R/RC datasheet, and bench-tested on real hardware. Issues

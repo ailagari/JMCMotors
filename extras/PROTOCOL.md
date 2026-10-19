@@ -1,9 +1,9 @@
-# LagariMotors — UDP Command Protocol Reference
+# JMCMotors — UDP Command Protocol Reference
 
 Complete syntax and response documentation for the JMC_CONTROLLINO_V3 command
 system implemented by this library.
 
-Library: https://github.com/ailagari/LagariMotors
+Library: https://github.com/ailagari/JMCMotors
 Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 
 ---
@@ -14,7 +14,8 @@ Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 |---|---|
 | Protocol | UDP, plain ASCII text |
 | Controller listens on | `CONTROLLINO_IP:CONTROLLINO_PORT` — set explicitly via `setNetwork()` (or `setStationId(n)` for the controller's own address, `192.168.1.(100+n):8001` by default) |
-| Replies + events sent to | `PC_IP:PC_PORT` — fixed, set via `setNetwork()`, never changes at runtime |
+| Replies sent to | the command's sender (IP + source port) **and** `PC_IP:PC_PORT` (once, if they are the same) |
+| Events + `Motor ready` sent to | `PC_IP:PC_PORT` only — fixed, set via `setNetwork()`, never changes at runtime |
 | Packet rule | **One command per UDP packet.** No terminator needed; whitespace is trimmed |
 | Unknown command | reply `INVALID COMMAND` |
 
@@ -37,9 +38,11 @@ jmc.setNetwork(mac,
   address — combine it with `setNetwork()`'s pcIp/pcPort, or rely on
   whatever was last set there.
 - **PC side** (`pcIp`/`pcPort`) — every reply and every `EVENT:` this
-  controller sends goes here, permanently. Commands are still accepted from
-  any sender (there's no authentication), but answers only ever go to this
-  configured address, so make sure it's correct before relying on replies.
+  controller sends goes here, permanently. Commands are accepted from any
+  sender (there's no authentication), and each reply is **also** sent back
+  to that sender's IP and source port, so a UDP tool sees its answers even
+  if it isn't listening on `pcPort`. Events and `Motor ready` only go to
+  this configured address, so make sure it's correct.
 
 PC and controller must be able to reach each other directly (same subnet, or
 routed) since there is no broadcast discovery to fall back on.

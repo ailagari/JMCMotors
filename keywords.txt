@@ -1,5 +1,5 @@
 #######################################
-# Syntax coloring map for LagariMotors
+# Syntax coloring map for JMCMotors
 #######################################
 
 #######################################

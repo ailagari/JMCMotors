@@ -1,8 +1,8 @@
 /*==============================================================================
-  LagariMotors.cpp  -  implementation (JMCBus + JMCMotor + JMCController)
+  JMCMotors.cpp  -  implementation (JMCBus + JMCMotor + JMCController)
   Author: LAGARI A <lagariscience@gmail.com>  |  License: MIT
 ==============================================================================*/
-#include "LagariMotors.h"
+#include "JMCMotors.h"
 #include <Controllino.h>
 #include <math.h>
 
@@ -753,10 +753,18 @@ JMCMotor* JMCController::motor(uint8_t index) {
 //  JMCController - comms & parsing helpers
 //==============================================================================
 
-void JMCController::reply(const String& msg) {
-  _udp.beginPacket(_pcIp, _pcPort);
+void JMCController::sendTo(IPAddress ip, uint16_t port, const String& msg) {
+  _udp.beginPacket(ip, port);
   _udp.write(msg.c_str());
   _udp.endPacket();
+}
+
+// Command replies go to the fixed PC and, if different, to the sender of the
+// last command - so a tool sending from a random port still gets its answer.
+void JMCController::reply(const String& msg) {
+  sendTo(_pcIp, _pcPort, msg);
+  if (_senderPort && (!(_senderIp == _pcIp) || _senderPort != _pcPort))
+    sendTo(_senderIp, _senderPort, msg);
 }
 
 // Parse positional CSV ("1000,,2000"): value+active per motor slot.
@@ -811,9 +819,10 @@ void JMCController::handleUdp() {
   args = (colon < 0) ? "" : in.substring(colon + 1);
   head.trim();
 
-  // No pairing/auto-adopt: every reply and event goes to the fixed PC
-  // address set via setNetwork()/setStationId(), regardless of who sent
-  // this packet.
+  // No pairing/auto-adopt: events always go to the fixed PC address set via
+  // setNetwork()/setStationId(). Replies also go back to this sender.
+  _senderIp   = _udp.remoteIP();
+  _senderPort = _udp.remotePort();
 
   // Exact-match multi-letter commands first, then single letters.
   if      (head == "PA") handlePositionAll(args);

@@ -1,9 +1,9 @@
 /*==============================================================================
-  LagariMotors.h  -  servo/stepper drive control library for Controllino
+  JMCMotors.h  -  servo/stepper drive control library for Controllino
 ==============================================================================
   Author : LAGARI A <lagariscience@gmail.com>
   License: MIT
-  Repo   : https://github.com/ailagari/LagariMotors
+  Repo   : https://github.com/ailagari/JMCMotors
 
   Complete control stack for integrated servo/stepper drives (IHSS/IHT
   "-RC" series) over Modbus-RTU / RS-485, with a ready-to-use UDP command
@@ -14,7 +14,7 @@
 
   QUICK START (Controllino MAXI + built-in RS-485)
   ------------------------------------------------
-    #include <LagariMotors.h>
+    #include <JMCMotors.h>
 
     JMCController jmc;                       // uses Serial3 (Controllino RS-485)
 
@@ -37,8 +37,9 @@
 
   Networking is static, no pairing/auto-discovery: set both the
   controller's own IP/port and the PC's IP/port with setNetwork() (or
-  setStationId() for the controller side). Replies and events always go
-  to the configured PC address - see setNetwork() below.
+  setStationId() for the controller side). Events always go to the
+  configured PC address; command replies go there and also back to the
+  command's sender - see setNetwork() below.
 
   LAYERS (all in this one header)
   -------------------------------
@@ -48,8 +49,8 @@
 
   UNITS: speed = rps, accel = rps/s, position = encoder steps (drive P17).
 ==============================================================================*/
-#ifndef LagariMotors_h
-#define LagariMotors_h
+#ifndef JMCMotors_h
+#define JMCMotors_h
 
 #include <Arduino.h>
 #include <Ethernet.h>
@@ -295,8 +296,9 @@ class JMCController {
     // ---- Configuration (call before begin) ---------------------------------
     // Fixed, permanent addressing - no pairing, no auto-adopt. localIp/
     // localPort is this controller's own address; pcIp/pcPort is where
-    // EVERY reply and event is sent, for the life of the sketch (commands
-    // are still accepted from any sender, but answers only ever go here).
+    // every reply and event is sent, for the life of the sketch. Command
+    // replies are also sent back to the command's sender (IP + source
+    // port) when that differs, so any UDP tool sees its answers.
     void setNetwork(const byte* mac,
                     IPAddress localIp, uint16_t localPort,
                     IPAddress pcIp,    uint16_t pcPort);
@@ -405,9 +407,14 @@ class JMCController {
     int      _monIdx   = -1;
     char     _cmdBuf[CMD_BUFFER_SIZE];
 
-    // Comms - always to the fixed, configured PC address.
+    // Comms. Events go only to the fixed, configured PC address; command
+    // replies go there AND back to whoever sent the last command, so any UDP
+    // tool sees its answers without having to listen on PC_PORT.
+    IPAddress _senderIp;
+    uint16_t  _senderPort = 0;             // 0 = no command received yet
+    void sendTo(IPAddress ip, uint16_t port, const String& msg);
     void reply(const String& msg);
-    void pushEvent(const String& msg) { reply(msg); }
+    void pushEvent(const String& msg) { sendTo(_pcIp, _pcPort, msg); }
 
     // Parsing helpers
     int  parseFields(const String& csv, long* value, bool* active);
@@ -462,4 +469,4 @@ class JMCController {
     void handleHoming(const String& head, const String& args);
 };
 
-#endif // LagariMotors_h
+#endif // JMCMotors_h

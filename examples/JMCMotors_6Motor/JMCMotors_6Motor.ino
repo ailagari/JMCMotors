@@ -1,7 +1,7 @@
 /*
-  LagariMotors_6Motor - 6-motor servo/stepper controller over UDP.
-  Part of LagariMotors (MIT) by LAGARI A <lagariscience@gmail.com>
-  https://github.com/ailagari/LagariMotors
+  JMCMotors_6Motor - 6-motor servo/stepper controller over UDP.
+  Part of JMCMotors (MIT) by LAGARI A <lagariscience@gmail.com>
+  https://github.com/ailagari/JMCMotors
 
   How to use + command list: README.md
   Full protocol reference:   extras/PROTOCOL.md
@@ -9,10 +9,11 @@
 
   Networking is fixed/static - no pairing, no auto-discovery. Edit the
   block below for your network; every reply and event this controller
-  sends goes to PC_IP:PC_PORT, permanently. On boot, once the drives are
+  sends goes to PC_IP:PC_PORT, permanently (command replies also go back
+  to whoever sent the command). On boot, once the drives are
   initialised, it sends "Motor ready" to that address.
 */
-#include <LagariMotors.h>
+#include <JMCMotors.h>
 
 //==============================================================================
 //  EDIT ME - network addresses
@@ -68,7 +69,7 @@ MotorSettings MOTOR[MOTOR_COUNT] = {
 JMCController jmc;                     // uses Serial3 (Controllino RS-485)
 
 /*  UDP COMMANDS - send one per packet to CONTROLLINO_IP:CONTROLLINO_PORT;
-    replies + events return to PC_IP:PC_PORT. Full reference: extras/PROTOCOL.md.
+    replies return to the sender + PC_IP:PC_PORT; events to PC_IP:PC_PORT. Full reference: extras/PROTOCOL.md.
       P:1000,,3000   absolute move: M1->1000, skip M2, M3->3000 (synchronised)
       PR:-1000       relative move ;  PA:5000 all motors ;  P:? / PA:? read pos
       V:0.5          speed (rps) ;  AD:0.2 accel+decel (rps/s)

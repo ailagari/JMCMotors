@@ -1,11 +1,11 @@
-# LagariMotors — Hardware Setup & Bring-Up Guide
+# JMCMotors — Hardware Setup & Bring-Up Guide
 
 Everything about the physical side: drive parameters, wiring, first-run
 verification, scaling, and position limits. For the command protocol see
 [PROTOCOL.md](PROTOCOL.md); for install-and-run see the
 [README](../README.md).
 
-Library: https://github.com/ailagari/LagariMotors
+Library: https://github.com/ailagari/JMCMotors
 Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 
 ---
