@@ -46,16 +46,23 @@ float GLOBAL_DECEL      = 0.5;   // rps/s
 float GLOBAL_VELOCITY   = 0.3;   // rps
 float GLOBAL_HOMING_VEL = 0.3;   // rps
 
+// ---- Number of motors on the bus (slave IDs 1..MOTOR_COUNT, up to 32) ------
+// Everything adapts to this one number: detection, the event monitor, every
+// command's motor slots. Set it to the number of drives actually installed
+// (a missing drive costs a probe on every monitor sweep). It can also be
+// changed live with the MC command (until the next reboot).
+const uint8_t MOTOR_COUNT = 6;
+
 // ---- PER-MOTOR mode (used when PER_MOTOR_SETTINGS = true) ------------------
 // One row per motor, in order (row 0 = motor 1, row 1 = motor 2, ...).
 // velocity/homingVel in rps (decimals OK), accel/decel in rps/s. These are
 // hardcoded values: they're re-applied on every boot and whenever a drive
 // comes back online, so they survive a power failure (unlike the runtime
 // V / AD / HV commands, which only last until the next reboot).
-const uint8_t MOTOR_COUNT = 6;
+// Motors beyond the last row (or a row with a 0) use the GLOBAL_* values.
 struct MotorSettings { float velocity, accel, decel, homingVel; };
 
-MotorSettings MOTOR[MOTOR_COUNT] = {
+MotorSettings MOTOR[] = {
   // velocity, accel, decel, homingVel
   { 0.3, 0.5, 0.5, 0.3 },   // motor 1
   { 0.3, 0.5, 0.5, 0.3 },   // motor 2
@@ -64,24 +71,32 @@ MotorSettings MOTOR[MOTOR_COUNT] = {
   { 0.3, 0.5, 0.5, 0.3 },   // motor 5
   { 0.3, 0.5, 0.5, 0.3 },   // motor 6
 };
+const uint8_t MOTOR_ROWS = sizeof(MOTOR) / sizeof(MOTOR[0]);
 //==============================================================================
 
 JMCController jmc;                     // uses Serial3 (Controllino RS-485)
 
 /*  UDP COMMANDS - send one per packet to CONTROLLINO_IP:CONTROLLINO_PORT;
-    replies return to the sender + PC_IP:PC_PORT; events to PC_IP:PC_PORT. Full reference: extras/PROTOCOL.md.
+    replies return to the sender + PC_IP:PC_PORT; events to PC_IP:PC_PORT.
+    Every motor command has a per-motor form (positional slots: field N =
+    motor N, empty = skip) and an all-motors form (empty/'all', or the 'A'
+    suffix for value commands). Full reference: extras/PROTOCOL.md.
       P:1000,,3000   absolute move: M1->1000, skip M2, M3->3000 (synchronised)
-      PR:-1000       relative move ;  PA:5000 all motors ;  P:? / PA:? read pos
-      V:0.5          speed (rps) ;  AD:0.2 accel+decel (rps/s)
-      VS             run continuously (endless) ;  stop with B
+      PR:-1000       relative move ;  PA:5000 / PRA:-500 all motors ;  P:? / PA:? read pos
+      V:0.5,,1       speed per motor (rps) ;  VA:0.5 all
+      AD:0.2,,0.5/0.2  accel/decel per motor (rps/s) ;  ADA:0.3/0.1 all
+      VS / VS:1,,1   run continuously (endless): all / M1+M3 ;  stop with B
       B              controlled stop, all ;  B3: immediate stop, all
       B2:1,,1        fast-brake M1 and M3 (positional slots, like P: empty=skip)
-      L              loosen brakes ;  BS brake status
-      Z / ZO:5000    current position -> 0 / -> 5000 (no movement)
+      L / L:,1       loosen brakes: all / motor 2 ;  BS brake status
+      Z / ZO:5000    current position -> 0 / -> 5000 (no movement) ;  ZOA:0 all
       HV:0.3 HO:1000 H3   homing: speed, offset, home ;  H3:1,,1 = M1 and M3
-      S / SD         status (raw / human-readable)
+                     HVA / HOA = all motors ;  methods H1..H12 (JMC manual)
+      S / SD / LS    status: formats / human-readable / limits+origin+homing
       R / I / X      alarm reset / re-detect motors / reboot controller
-      MC:? / MC:8    read / set active motor count at runtime                   */
+      MC:? / MC:8    read / set active motor count at runtime
+    EVENTS pushed to PC_IP:PC_PORT: LIMIT (CW/CCW), ORIGIN (SW), HOMED,
+    HOMING_ERROR, FAULT, FAULT_CLEARED, ONLINE, OFFLINE.                        */
 
 void setup() {
   Serial.begin(115200);
@@ -92,15 +107,16 @@ void setup() {
 
   jmc.setMotorCount(MOTOR_COUNT);      // drives with slave IDs 1..MOTOR_COUNT (up to 32)
 
+  // Globals always apply as the fallback (motors without a table row, or a
+  // row holding 0); per-motor rows override them when enabled.
+  jmc.setMotionDefaults(GLOBAL_ACCEL, GLOBAL_DECEL, GLOBAL_VELOCITY, GLOBAL_HOMING_VEL);
   if (PER_MOTOR_SETTINGS) {
-    for (uint8_t i = 0; i < MOTOR_COUNT; i++) {
+    for (uint8_t i = 0; i < MOTOR_COUNT && i < MOTOR_ROWS; i++) {
       uint8_t id = i + 1;              // motor IDs are 1-based
       jmc.setMotorVelocity(id, MOTOR[i].velocity);
       jmc.setMotorAccelDecel(id, MOTOR[i].accel, MOTOR[i].decel);
       jmc.setMotorHomingVelocity(id, MOTOR[i].homingVel);
     }
-  } else {
-    jmc.setMotionDefaults(GLOBAL_ACCEL, GLOBAL_DECEL, GLOBAL_VELOCITY, GLOBAL_HOMING_VEL);
   }
 
   // jmc.setMotorHomingOffset(1, 1000); // optional: steps past sensor, per motor

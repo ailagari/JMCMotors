@@ -19,11 +19,11 @@ Companion documents: [HARDWARE.md](HARDWARE.md) (drive setup, wiring, bring-up)
 1. [Transport and addressing](#1-transport-and-addressing)
 2. [Command grammar and command types](#2-command-grammar-and-command-types)
 3. [Reply types](#3-reply-types)
-4. [Motion commands](#4-motion-commands) — `P` `PR` `PA`
-5. [Speed and ramp commands](#5-speed-and-ramp-commands) — `V` `VA` `VS` `AD`
+4. [Motion commands](#4-motion-commands) — `P` `PR` `PA` `PRA`
+5. [Speed and ramp commands](#5-speed-and-ramp-commands) — `V` `VA` `VS` `AD` `ADA`
 6. [Stopping commands](#6-stopping-commands) — `B` `B1` `B2` `B3` `L` `BS`
-7. [Zero and homing commands](#7-zero-and-homing-commands) — `Z` `ZO` `ZS` `HV` `HO` `H1`…`H12`
-8. [Status and diagnostic commands](#8-status-and-diagnostic-commands) — `S` `SD` `DG`
+7. [Zero and homing commands](#7-zero-and-homing-commands) — `Z` `ZO` `ZOA` `ZS` `HV` `HVA` `HO` `HOA` `H1`…`H12`
+8. [Status and diagnostic commands](#8-status-and-diagnostic-commands) — `S` `SD` `LS` `DG`
 9. [Administration commands](#9-administration-commands) — `I` `R` `MC` `X`
 10. [Events: what the controller sends on its own](#10-events-what-the-controller-sends-on-its-own)
 11. [Trigger and response matrix](#11-trigger-and-response-matrix)
@@ -103,16 +103,39 @@ selection is expected.
 ### 2.2 The six command shapes
 
 Every command belongs to one of these shapes. Once you know the shape, you
-know how its arguments are read.
+know how its arguments are read. **Every motor command exists in a
+per-motor form and an all-motors form**: selector commands take an empty
+argument or `all` for everyone, and every value command has an `A`-suffixed
+twin that applies one value to all motors (`PA`, `PRA`, `VA`, `ADA`, `ZOA`,
+`HOA`, `HVA`).
 
 | Shape | How arguments are read | Commands |
 |---|---|---|
-| **A. Bare** | no argument; acts on every motor or on the controller | `I` `X` `VS` `BS` `ZS` `SD` `B` `L` `Z` `R` `H<n>` |
-| **B. Positional values** | field N is a **value for motor N**; empty field = skip that motor; a single value with **no comma = motor 1 only** | `P` `PR` `ZO` `HO` `V` `HV` |
-| **C. Positional selectors** | field N is a **flag for motor N**; any non-empty text selects it, empty skips it; no argument or `all` = every motor | `B` `B1` `B2` `B3` `L` `Z` `R` `H<n>` |
-| **D. Whole-bus value** | one value applied to **all** motors at once | `PA` `VA` `AD` `MC` |
+| **A. Bare** | no argument; acts on every motor or on the controller | `I` `X` `VS` `BS` `ZS` `LS` `SD` `DG` `B` `L` `Z` `R` `H<n>` |
+| **B. Positional values** | field N is a **value for motor N**; empty field = skip that motor; a single value with **no comma = motor 1 only** | `P` `PR` `ZO` `HO` `V` `HV` `AD` |
+| **C. Positional selectors** | field N is a **flag for motor N**; any non-empty text selects it, empty skips it; no argument or `all` = every motor | `B` `B1` `B2` `B3` `L` `Z` `R` `H<n>` `VS` `I` `BS` `ZS` `LS` |
+| **D. Whole-bus value** | one value applied to **all** motors at once | `PA` `PRA` `VA` `ADA` `ZOA` `HOA` `HVA` `MC` |
 | **E. Query** | `?` in a field reads instead of writes | `P:?` `PR:?` `PA:?` `SD:?` `V:?` `VA:?` `HO:?` `AD:?` `MC:?` |
 | **F. Motor number** | the argument is a motor **number**, not a slot | `S:<n>` `SD:<n>` `DG:<n>` |
+
+Per-motor ↔ all-motors at a glance:
+
+| Action | One or some motors | All motors |
+|---|---|---|
+| absolute move | `P:1000,,3000` | `PA:1000` |
+| relative move | `PR:-500,,200` | `PRA:-500` |
+| run speed | `V:0.5,,0.3` | `VA:0.5` |
+| jog (velocity mode) | `VS:1,,1` | `VS` |
+| ramps | `AD:0.2,,0.5/0.2` | `ADA:0.2` |
+| stop (any type) | `B2:1,,1` | `B2:` |
+| loosen brake | `L:,1` | `L` |
+| zero here | `Z:1,,1` | `Z` |
+| position = value | `ZO:5000,,100` | `ZOA:5000` |
+| homing speed | `HV:0.2,,0.3` | `HVA:0.2` |
+| homing offset | `HO:1000,,-800` | `HOA:1000` |
+| start homing | `H3:1,,1` | `H3` |
+| reset / re-init | `R:,,1` · `I:,,1` | `R` · `I` |
+| status | `S:3` `SD:3` `LS:,,1` `BS:,,1` `ZS:,,1` `DG:3` | `S:0` `SD` `LS` `BS` `ZS` `DG` |
 
 ### 2.3 Positional slots, explained once
 
@@ -138,8 +161,16 @@ Only the shape-F commands (`S`, `SD:<n>`, `DG`) take a plain motor number.
   step 0; `P:all` does the same). Values are never rejected for being
   non-numeric, so validate on the PC side.
 - Fields beyond the configured motor count (`MC`) are ignored.
-- Decimal velocities use a dot: `V:0.5`. A comma is always a field separator.
+- Decimal velocities use a dot: `V:0.5`. A comma is always a field separator;
+  inside an `AD` slot, accel and decel are separated by `/`.
 - `P:1000,` (trailing comma) and `P:1000` are equivalent: motor 1 only.
+- **Motor count.** The number of motors is one variable: `setMotorCount(n)`
+  in the sketch or `MC:n` at runtime, 1–32. Every command's slots, every
+  all-motors form, detection and the event monitor follow it. Replies that
+  list every motor are sent in **several packets** when they would exceed
+  about 300 characters (roughly from 16 motors up); each continuation packet
+  repeats the reply's header (`STATUS:`, `LIMITS: `, …) and starts a fresh
+  comma-separated list, so concatenate on the PC side if you need one line.
 
 ---
 
@@ -248,6 +279,20 @@ deferral rule of `P` applies.
 
 **Errors**: `ERR:PA needs position`.
 
+### `PRA` — all motors by the same relative distance
+
+**Shape D.** The relative twin of `PA`: every motor moves by the same delta
+from where it is, launched by broadcast.
+
+| Send | Effect | Reply |
+|---|---|---|
+| `PRA:1000` | every motor forward 1000 steps | `OK` |
+| `PRA:-250` | every motor back 250 steps | `OK` |
+| `PRA:?` | positions of all motors (same as `PA:?`) | `M1=…,M2=…` |
+
+Same broadcast behaviour, motor-1 speed and deferral rule as `PA`.
+**Errors**: `ERR:PRA needs delta`.
+
 ### Position query replies
 
 `P:?`, `PR:?` and `PA:?` all answer with `M<n>=<steps>` pairs for the motors
@@ -297,17 +342,23 @@ speed at once.
 
 ### `VS` — start velocity mode (endless rotation)
 
-**Shape A.** Every motor runs continuously at its stored `V` speed.
+**Shape C** (positional selectors). The selected motors run continuously,
+each at its own stored `V` speed.
 
 | Send | Effect | Reply |
 |---|---|---|
-| `VS` | all motors jog at their `V` speeds, broadcast start | `VS: velocity mode started (stop with B)` |
+| `VS` or `VS:all` | all motors jog, broadcast start | `VS: velocity mode started (stop with B)` |
+| `VS:1,,1` | motors 1 and 3 only | `VS: velocity mode started for M1,3 (stop with B)` |
+| `VS:,1` | motor 2 only | `VS: velocity mode started for M2 (stop with B)` |
 
-**What it triggers**: cancels any deferred move, writes each motor's own speed
-and switches it to velocity mode, then one broadcast enable + start so all
-shafts begin together. Direction is the sign of the speed (`V:-0.5` jogs
-backwards). Velocity mode consumes no position range, so use it for anything
-that spins forever (turntables, conveyors).
+**What it triggers**: cancels any deferred move, writes each selected motor's
+own speed and switches it to velocity mode, then launches: one broadcast
+enable + start when every motor is selected (all shafts begin together), or a
+per-motor enable + start for a subset (broadcast would also start the
+others). Direction is the sign of the speed (`V:-0.5` jogs backwards).
+Velocity mode consumes no position range, so use it for anything that spins
+forever (turntables, conveyors). **Errors**: `ERR:VS no motors selected
+(e.g. VS:1,,1)`.
 
 **Leaving velocity mode**: `B` (any type) stops it. `P`/`PR`/`PA`, `Z`, `ZO`
 and `H<n>` all brake the motors on the `AD` decel ramp first (see `P`). `Z`,
@@ -315,27 +366,45 @@ and `H<n>` all brake the motors on the `AD` decel ramp first (see `P`). `Z`,
 commands wait in the background. A 2 rps jog at `AD:0.2` takes 10 s to brake,
 so send `B` first when the ramp is slow.
 
-### `AD` — acceleration and deceleration (rps/s)
+### `AD` — acceleration and deceleration per motor (rps/s)
 
-**Shape D.** Sets the ramps for **all** motors, writes them to every drive
-immediately (also refreshing the quick-stop ramp used by `B2`), and remembers
-them for every re-initialisation.
+**Shape B** (positional values). Each slot is `acc` (accel = decel) or
+`acc/dec`. Written to the drive immediately (also refreshing the quick-stop
+ramp used by `B2`) and remembered for every re-initialisation.
 
 | Send | Effect | Reply |
 |---|---|---|
-| `AD:0.2` | accel = decel = 0.2 rps/s | `AD: all motors accel=0.2 decel=0.2 rps/s` |
-| `AD:0.3,0.1` | accel 0.3, decel 0.1 rps/s | `AD: all motors accel=0.3 decel=0.1 rps/s` |
-| `AD:?` or `AD:` | read per-motor values | `AD: M1=0.5/0.5,M2=0.5/0.5,… rps/s (accel/decel)` |
+| `AD:0.2` | motor 1: accel = decel = 0.2 rps/s | `AD: M1=0.2/0.2 rps/s (accel/decel)` |
+| `AD:0.3/0.1` | motor 1: accel 0.3, decel 0.1 | `AD: M1=0.3/0.1 rps/s (accel/decel)` |
+| `AD:0.2,,0.5/0.2` | M1 0.2/0.2, skip M2, M3 0.5/0.2 | `AD: M1=0.2/0.2,M3=0.5/0.2 rps/s (accel/decel)` |
+| `AD:?` or `AD:` | read every motor | `AD: M1=0.5/0.5,M2=0.5/0.5,… rps/s (accel/decel)` |
 
 Ramp time = speed ÷ ramp: 0.3 rps at 0.1 rps/s takes 3 s to reach speed. For
 geared mechanisms pair a slow ramp with drive parameter **P19 = 7** (speed
 smoothness, set on the drive panel). Default 0.5/0.5 rps/s.
 
-**Errors**: `ERR:AD range 0.1..6553.5 rps/s` (zero, negative or too large).
+**Errors**: `ERR:AD range 0.1..6553.5 rps/s (M2)` (zero, negative or too
+large in that slot; nothing was written) · `ERR:AD needs values (…)`.
 
-**Note**: the `I` command re-initialises with the sketch's *global* ramp
-defaults, so re-send `AD` after `I` if you changed it at runtime. `R` keeps the
-runtime value.
+> **Changed in 0.4.0.** `AD` used to apply to all motors, and `AD:0.3,0.1`
+> meant "accel 0.3, decel 0.1 for everyone". It is now positional like every
+> other value command; use `ADA` for the all-motors form.
+
+### `ADA` — acceleration and deceleration for all motors
+
+**Shape D.**
+
+| Send | Effect | Reply |
+|---|---|---|
+| `ADA:0.2` | every motor accel = decel = 0.2 rps/s | `ADA: all motors accel=0.2 decel=0.2 rps/s` |
+| `ADA:0.3/0.1` (or `ADA:0.3,0.1`) | every motor accel 0.3, decel 0.1 | `ADA: all motors accel=0.3 decel=0.1 rps/s` |
+| `ADA:?` | same as `AD:?` | `AD: M1=…` |
+
+**Errors**: `ERR:ADA range 0.1..6553.5 rps/s`.
+
+`I` and `R` both re-initialise a motor with its current ramps (sketch table
+or runtime `AD`/`ADA`), so a runtime value survives them; only a reboot
+reverts to the sketch.
 
 ---
 
@@ -393,12 +462,14 @@ motors selected (e.g. L:1,,1)`.
 
 ### `BS` — brake status
 
-**Shape A.** Reads every motor's status word and reports brake and motion
-state.
+**Shape A / C.** Reads the selected motors' status words and reports brake
+and motion state. `BS` = all, `BS:1,,1` = motors 1 and 3.
 
 ```
 Send:  BS
 Reply: BRAKE STATUS: M1:FREE/RUN,M2:BRAKE/STOP,M3:ERROR | SUMMARY: MIXED
+Send:  BS:,1
+Reply: BRAKE STATUS: M2:BRAKE/STOP | SUMMARY: BRAKED
 ```
 
 | Token | Meaning |
@@ -407,7 +478,9 @@ Reply: BRAKE STATUS: M1:FREE/RUN,M2:BRAKE/STOP,M3:ERROR | SUMMARY: MIXED
 | `FREE` | enabled and not halted |
 | `RUN` / `STOP` | motor running (bit 9) / standing |
 | `ERROR` | no RS-485 answer |
-| `SUMMARY` | `BRAKED` (all braked), `FREE` (all free), `MIXED`, or `ERROR` (nobody answered) |
+| `SUMMARY` | `BRAKED` (all selected braked), `FREE` (all free), `MIXED`, or `ERROR` (none of the selected answered) |
+
+**Errors**: `ERR:BS no motors selected (e.g. BS:1,,1)`.
 
 ---
 
@@ -447,9 +520,15 @@ the same register `HO` uses — that is why every `H<n>` re-writes the stored
 `HO` offset before starting. **Errors**: `ERR:ZO needs values` · `ERR:no
 values`.
 
+### `ZOA` — every motor's current position becomes the same value
+
+**Shape D.** `ZOA:0` is the same as `Z`; `ZOA:5000` makes every motor read
+5000 where it stands. Reply as `ZO` listing every motor:
+`ZO: M1=5000,M2=5000,… (current position redefined)`.
+
 ### `ZS` — zero status
 
-**Shape A.**
+**Shape A / C.** `ZS` = all, `ZS:1,,1` = motors 1 and 3.
 
 ```
 Send:  ZS
@@ -458,8 +537,10 @@ Reply: ZERO STATUS: M1:ZERO(0),M2:NOT_SET(1500),M3:ERROR | ZERO_NOT_SET
 
 `ZERO` means a `Z` or `ZO` was applied to that motor since the controller
 booted; `NOT_SET` means it was not. **Homing does not set this flag** — it
-tracks the explicit zero commands only. The number in brackets is the live
-position. Trailer `ALL_ZERO_SET` only when every motor is `ZERO` and answered.
+tracks the explicit zero commands only; the homing state is in `LS` and
+`SD`. The number in brackets is the live position. Trailer `ALL_ZERO_SET`
+only when every selected motor is `ZERO` and answered. **Errors**: `ERR:ZS no
+motors selected (e.g. ZS:1,,1)`.
 
 ### `HV` — homing velocity (rps)
 
@@ -474,6 +555,11 @@ position. Trailer `ALL_ZERO_SET` only when every motor is `ZERO` and answered.
 
 Default 0.3 rps. There is no `HV:?` — read it back with `DG` or keep it in
 the sketch. **Errors**: `ERR:HV needs argument`.
+
+### `HVA` — homing velocity for all motors
+
+**Shape D.** `HVA:0.2` sets every motor's homing speed to 0.2 rps; reply
+`Set HV: 0.2,0.2,…`.
 
 ### `HO` — homing offset (steps past the sensor)
 
@@ -492,6 +578,11 @@ it declares zero (drive register 0x607C). Sign sets the direction.
 `MC`, automatic `EVENT:ONLINE`). **Errors**: `ERR:HO needs steps (HO:1000 or
 HO:?)` · `ERR:no offset values`.
 
+### `HOA` — homing offset for all motors
+
+**Shape D.** `HOA:1000` gives every motor a 1000-step offset; reply
+`HO: M1=1000,M2=1000,… steps after sensor (used at next homing)`.
+
 ### `H1` … `H12` — start homing
 
 **Shape C**, with the homing **method in the head**.
@@ -503,18 +594,45 @@ HO:?)` · `ERR:no offset values`.
 | `H3:,1` | motor 2 only | `Homing method 3 started for M2` |
 | `H3:all` | all motors, method 3 | `Homing method 3 started for all motors` |
 
-| Method | Behaviour (per the JMC manual) |
-|---|---|
-| 1 / 2 | run to the **CW / CCW limit switch** and take it as zero |
-| 3 / 4 | run to the **origin switch**, approaching **CW / CCW** |
-| 5 – 12 | fast variants: approach at `HV`, back off, re-approach slowly for precision |
+The drive supports homing methods 0–12 (JMC Modbus manual V2.2, §6.3).
+Method 0 ("no movement, current position becomes the origin") is what `Z`
+and `ZO` use; `H1`–`H12` are the moving methods. The three inputs involved
+are the **CW limit**, the **CCW limit** and the **origin switch** (called
+"SW mechanical origin" in the manual, status bit 11). Direction words below
+are the manual's: "left" = towards the CW limit, "right" = towards the CCW
+limit.
+
+| Method | Uses | Behaviour (per the JMC manual) | Max homing speed |
+|---|---|---|---|
+| 1 | CW limit | move left, stop at the CW limit | 300 rpm (5 rps) |
+| 2 | CCW limit | move right, stop at the CCW limit | 300 rpm |
+| 3 | origin, CW limit as fallback | move left to the origin switch; if the CW limit is hit first, reverse and stop at the origin | 300 rpm |
+| 4 | origin, CCW limit as fallback | mirror of 3, moving right | 300 rpm |
+| 5 | CW limit | fast to the limit, back off slowly, re-approach slowly, stop at the CW limit | 1200 rpm |
+| 6 | CCW limit | mirror of 5 | 1200 rpm |
+| 7 | origin, CW limit as fallback | fast to the origin (reverse at the CW limit if needed), back off, re-approach slowly, stop at the origin | 1200 rpm |
+| 8 | origin, CCW limit as fallback | mirror of 7 | 1200 rpm |
+| 9 | CW limit | as 5, and the `HO` offset may be positive or negative | 1200 rpm |
+| 10 | CCW limit | as 6, signed offset | 1200 rpm |
+| 11 | origin, CW limit as fallback | as 7, signed offset | 1200 rpm |
+| 12 | origin, CCW limit as fallback | as 8, signed offset | 1200 rpm |
+
+`HV` sets the search speed (0x6099) and the slow zero-find speed (0x609B)
+to the same value; keep it well under the method's maximum. Methods that end
+on a limit switch (1, 2, 5, 6, 9, 10) also raise the normal
+`EVENT:LIMIT:…` on the way — that is expected.
 
 **What it triggers**, per selected motor: brake to standstill if jogging
 (blocking, max 5 s) → re-write the stored `HO` offset → switch to homing mode →
-write the method → pulse the start bit. The reply means **homing has
-started**, not finished. Completion is **not** pushed as an event: poll
-`S:n,FLAGS` for `HOMED` (bit 12), or `SD` for `Homing: complete`. Set `HV`
-and `HO` *before* homing.
+write the method → pulse the start bit → arm the event monitor. The reply
+means **homing has started**, not finished. Completion and failure **are
+pushed as events**: `EVENT:HOMED:M1 POS=0 ST=0x…` when the drive reports
+homing complete (status bit 12 while in homing mode) and
+`EVENT:HOMING_ERROR:M1 ST=0x…` when it reports a homing error (bit 13 in
+homing mode). You can also poll `LS` (`HOMED=BUSY` → `1` or `ERR`),
+`S:n,FLAGS` (`HOMED`) or `SD`. Set `HV` and `HO` *before* homing. The drive
+stays in homing mode until the next move command; the next `P`/`PR`/`PA`
+switches it back to position mode automatically.
 
 **Errors**: `ERR:homing method H1..H12` · `ERR:H no motors selected (e.g.
 H3:1,,1)`.
@@ -534,18 +652,26 @@ H3:1,,1)`.
 | `COMPACT` | `S:1,COMPACT` | `M1:RUN\|STP\|TR\|POS=10000\|VEL=0.0` | polling a move until `TR` |
 | `STATE` | `S:0,STATE` | `STATES:M1:Device enable,M2:ERROR,M3:Fault alarm` | which drive state each motor is in |
 | `BITS` | `S:1,BITS` | `M1:0001 0100 0011 0111` | comparing against the manual's bit table |
-| `FLAGS` | `S:1,FLAGS` | `M1:READY\|INIT\|ENABLED\|WORKING\|QSTOP\|REACHED\|HOMED` | reading named bits at a glance |
+| `FLAGS` | `S:1,FLAGS` | `M1:READY\|INIT\|ENABLED\|WORKING\|QSTOP\|REACHED\|SETPOINT_OK` | reading named bits at a glance |
 | `DETAIL` | `S:0,DETAIL` | one multi-line packet **per motor** (below) | a quick dump without `SD`'s prose |
 
 `COMPACT` tokens: first `RUN` (enabled) / `OFF` (disabled) / `ERR` (fault
 bit set); second `MOV` / `STP`; third `TR` (target reached) / `NR`.
+
+`FLAGS` names bits 10, 12 and 13 **according to the motor's current mode**,
+because the drive redefines them per mode (see §12): in position mode
+`REACHED` / `SETPOINT_OK` / `POSERR`, in velocity mode `AT_SPEED` /
+`VEL_ZERO` / `MAX_ACCEL`, in homing mode `HOME_REACHED` / `HOMED` /
+`HOME_ERROR`. The mode is the one the controller last commanded (`P`-family
+and `Z`/`ZO` → position, `VS` → velocity, `H<n>` → homing).
 
 `DETAIL` packet layout:
 
 ```
 M1 (ID 1)
   Status: 0x1437 (Device enable)
-  Flags:  READY|INIT|ENABLED|WORKING|QSTOP|REACHED|HOMED
+  Mode:   position
+  Flags:  READY|INIT|ENABLED|WORKING|QSTOP|REACHED|SETPOINT_OK
   Bits:   0001 0100 0011 0111
   Pos:    10000
   Vel:    0.0 rps
@@ -571,10 +697,11 @@ RAW|COMPACT|DETAIL|STATE|BITS|FLAGS`.
 ```
 === MOTOR 1 (Slave ID 1) Status 0x1437 ===
 State: Device enable
+Mode: position
 Motor: ENABLED, stopped
 Position: 10000 steps (target REACHED)
 Velocity: 0.0 rps
-Homing: complete | Origin switch: off
+Homing: homed | Origin switch (SW): off
 Limits: CW clear | CCW clear
 Health: OK, no faults
 ```
@@ -584,8 +711,15 @@ Variations you will see:
 - `Motor: ENABLED, RUNNING, HALT active, QUICK-STOP active` — extra tokens
   appear when those bits are set.
 - `State: Quick stop active (entering initialization)`.
-- `Limits: CW *** ACTIVE *** | CCW clear` when a limit switch is pressed.
-- `OVER-POSITION ERROR (bit13)` and `WARNING active (bit7)` lines when set.
+- `Homing:` is mode-aware. In homing mode it reads the drive live:
+  `IN PROGRESS`, `complete` or `ERROR`. In the other modes it reports what
+  the controller latched: `homed` (a homing run completed since the last
+  re-init), `not homed since boot`, or `ERROR (last run failed)`.
+- `Limits: CW *** ACTIVE *** | CCW clear` when a limit switch is pressed;
+  `Origin switch (SW): ON` while the origin sensor is covered.
+- Bit 13 line by mode: `OVER-POSITION ERROR (bit13)` (position),
+  `MAX ACCELERATION reached (bit13)` (velocity), `HOMING ERROR (bit13)`
+  (homing); plus `WARNING active (bit7)` when set.
 - On a fault the last line becomes
   `FAULT: over-current (0x1001=0x2) -> send R:1 to reset` — the fault names
   are `over-current`, `voltage-error`, `over-temperature`,
@@ -598,11 +732,32 @@ Variations you will see:
 **Errors**: `ERR:no '?' fields in SD query` · `ERR:SD use SD, SD:? or
 SD:1..6`.
 
+### `LS` — limit switches, origin switch and homing state
+
+**Shape A / C.** One line with every switch input and the homing state per
+motor, machine-friendly, valid in any mode. `LS` = all motors, `LS:1,,1` =
+motors 1 and 3.
+
+```
+Send:  LS
+Reply: LIMITS: M1:CW=0 CCW=0 SW=1 HOMED=1 MODE=POS,M2:CW=1 CCW=0 SW=0 HOMED=BUSY MODE=HOM,M3:ERROR
+```
+
+| Field | Values | Source |
+|---|---|---|
+| `CW` / `CCW` | `1` = that limit-switch input is active | status bits 14 / 15 |
+| `SW` | `1` = the origin (mechanical-origin) switch input is active | status bit 11 |
+| `HOMED` | `0` never homed since the drive was last initialised · `BUSY` homing in progress · `1` homing completed · `ERR` the drive reported a homing error | bit 12 / 13 while in homing mode, latched afterwards |
+| `MODE` | `POS`, `VEL` or `HOM` — the mode the controller last commanded | controller |
+
+**Errors**: `ERR:LS no motors selected (e.g. LS:1,,1)`.
+
 ### `DG` — low-level register diagnosis
 
-**Shape F.** `DG:<motor>` reads back what the drive actually holds and
-live-tests both Modbus write function codes. Harmless: the write tests
-re-write values already in the drive, so nothing moves.
+**Shape A / F.** `DG:<motor>` reads back what the drive actually holds and
+live-tests both Modbus write function codes; `DG`, `DG:0` or `DG:all` does
+it for every motor, one packet each. Harmless: the write tests re-write
+values already in the drive, so nothing moves.
 
 ```
 Send:  DG:1
@@ -627,16 +782,16 @@ Reply: DG M1: fmt6000=0 st6041=0x1437 mode6061=1 err1001=0x0
 How to read it when a motor "replies OK but does not move": `tgt607A` not
 changing after `P` → writes are not landing (check `WRITE10`); `vel6081=0,0`
 → velocity 0, send `V`; `mode6061` wrong → send `R`; `err1001` non-zero →
-fault, send `R`. **Errors**: `ERR:DG usage DG:1..6`.
+fault, send `R`. **Errors**: `ERR:DG usage DG, DG:all or DG:1..6`.
 
 ---
 
 ## 9. Administration commands
 
-### `I` — detect and initialise all motors
+### `I` — detect and initialise motors
 
-**Shape A.** Re-runs the full initialisation on every configured slot and
-reports per motor.
+**Shape A / C.** Re-runs the full initialisation and reports per motor. `I`
+or `I:all` = every configured slot, `I:1,,1` = motors 1 and 3.
 
 ```
 MOTOR INITIALIZATION:
@@ -649,13 +804,16 @@ Motor 2 (Slave ID 2): NOT DETECTED (TIMEOUT)
 Total motors detected: 5 of 6
 ```
 
-When every slot answers, a final line `SUCCESS: All expected motors detected
-and initialized!` is appended.
+When every selected motor answers, a final line `SUCCESS: All expected motors
+detected and initialized!` is appended. With many motors the report arrives
+in several packets (about three motors per packet); the `Total …` line is in
+the last one.
 
 **What it triggers**: cancels any deferred move; per motor: enable sequence,
-position mode, ramps (**the sketch's global defaults**, not a runtime `AD`),
-and marks the motor online/offline for the event monitor. Initialisation does
-not move the motor or change its position counter.
+position mode, that motor's ramps (sketch table or runtime `AD`), homing
+speeds, and marks the motor online/offline for the event monitor. The
+homed flag is kept. Initialisation does not move the motor or change its
+position counter. **Errors**: `ERR:I no motors selected (e.g. I:1,,1)`.
 
 ### `R` — alarm reset and re-initialise
 
@@ -713,6 +871,10 @@ persists.
 | CW limit input released | `EVENT:LIMIT:M2:CW_CLEARED` | — |
 | CCW limit input goes active (bit 15) | `EVENT:LIMIT:M2:CCW POS=-120 ST=0x8677` | as above |
 | CCW limit released | `EVENT:LIMIT:M2:CCW_CLEARED` | — |
+| Origin switch input goes active (bit 11 rises) | `EVENT:ORIGIN:M2:ON POS=1012 ST=0x1c37` | informational; homing methods 3/4/7/8/11/12 stop here |
+| Origin switch input released | `EVENT:ORIGIN:M2:OFF` | — |
+| Homing run completes (bit 12 rises while in homing mode, after `H<n>`) | `EVENT:HOMED:M2 POS=0 ST=0x1437` | the counter now reads the `HO` offset relative to the switch; safe to position |
+| Homing run fails (bit 13 while in homing mode) | `EVENT:HOMING_ERROR:M2 ST=0x3437 (check limit/origin wiring, HV, HO)` | check the switches, `HV`, `HO`; `R:…` then retry |
 | Fault bit (bit 3) rises | `EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT` | read `SD`, fix the cause, `R:…` |
 | Fault bit clears | `EVENT:FAULT_CLEARED:M3` | — |
 | Two consecutive status reads fail | `EVENT:OFFLINE:M4` | check power / RS-485 / slave ID; the controller retries every 3 s |
@@ -727,8 +889,8 @@ under 100 ms; 32 motors → under 450 ms). Offline drives are probed only every
 3 s with a 12 ms timeout so a dead drive cannot slow the sweep for the live
 ones.
 
-**What is *not* an event**: target reached, homing complete, and the end of a
-`B` ramp are not pushed. Poll `S:n,COMPACT` / `S:n,FLAGS` for those.
+**What is *not* an event**: target reached and the end of a `B` ramp are not
+pushed. Poll `S:n,COMPACT` (`TR`) for those.
 
 ---
 
@@ -739,27 +901,28 @@ comes back.
 
 | Command | Writes to drives? | Stored in controller? | Cancels a pending move? | Brakes a jog first? | Reply |
 |---|---|---|---|---|---|
-| `P` / `PR` | yes: target + velocity, enable, start | — | supersedes it | yes, non-blocking, `OK` deferred | `OK` |
-| `PA` | yes, broadcast | — | supersedes it | yes, non-blocking | `OK` |
+| `P` / `PR` | yes: target + velocity, enable, start | mode = position | supersedes it | yes, non-blocking, `OK` deferred | `OK` |
+| `PA` / `PRA` | yes, broadcast | mode = position | supersedes it | yes, non-blocking | `OK` |
 | `P:?` `PR:?` `PA:?` | reads position | — | no | no | `M1=…` / `WARN: …` |
 | `V` | **no** (used at next move) | yes | no | no | `Set … V: …` |
 | `VA` | yes, broadcast velocity | yes | no | no | `VA: …` |
-| `VS` | yes: mode, velocity, broadcast start | — | yes | — | `VS: velocity mode started (stop with B)` |
-| `AD` | yes, all drives (+ quick-stop ramp) | yes | no | no | `AD: all motors …` |
+| `VS` | yes: mode, velocity, start (broadcast or per motor) | mode = velocity | yes | — | `VS: velocity mode started … (stop with B)` |
+| `AD` / `ADA` | yes, selected / all drives (+ quick-stop ramp) | yes | no | no | `AD: M1=… rps/s (accel/decel)` / `ADA: all motors …` |
 | `B` `B1` `B2` `B3` | yes: halt / quick-stop | — | yes | — | `… stopped with deceleration` / `… brake applied to …` |
 | `L` | yes: brake open (torque off) | — | no | no | `… brake(s) loosened` |
 | `BS` | reads status | — | no | no | `BRAKE STATUS: …` |
-| `Z` | yes: homing method 0 + mode | zero flag | no | yes, blocking ≤ 5 s | `… set to zero position` |
-| `ZO` | yes: home offset + method 0 + mode | zero flag | no | yes, blocking ≤ 5 s | `ZO: … (current position redefined)` |
+| `Z` / `ZOA:0` | yes: homing method 0 + mode | zero flag, mode = position | no | yes, blocking ≤ 5 s | `… set to zero position` |
+| `ZO` / `ZOA` | yes: home offset + method 0 + mode | zero flag, mode = position | no | yes, blocking ≤ 5 s | `ZO: … (current position redefined)` |
 | `ZS` | reads position | — | no | no | `ZERO STATUS: …` |
-| `HV` | yes: 0x6099 + 0x609B | yes | no | no | `Set … HV: …` |
-| `HO` | yes: 0x607C | yes | no | no | `HO: … (used at next homing)` |
-| `H<n>` | yes: `HO`, homing mode, method, start | — | no | yes, blocking ≤ 5 s | `Homing method n started for …` |
+| `LS` | reads status | — | no | no | `LIMITS: …` |
+| `HV` / `HVA` | yes: 0x6099 + 0x609B | yes | no | no | `Set … HV: …` |
+| `HO` / `HOA` | yes: 0x607C | yes | no | no | `HO: … (used at next homing)` |
+| `H<n>` | yes: `HO`, homing mode, method, start | mode = homing, homing armed | no | yes, blocking ≤ 5 s | `Homing method n started for …` then `EVENT:HOMED` / `EVENT:HOMING_ERROR` |
 | `S` | reads status (+ position/velocity for COMPACT/DETAIL) | — | no | no | per format |
 | `SD` | reads status, position, velocity, error reg | — | no | no | one packet per motor |
-| `DG` | reads 9 registers, 2 harmless writes | — | no | no | `DG M<n>: …` |
-| `I` | yes: full init, every slot | online flags | yes | — | `MOTOR INITIALIZATION: …` |
-| `R` | yes: alarm reset + init | online/fault flags | yes | — | `… reset complete` |
+| `DG` | reads 9 registers, 2 harmless writes | — | no | no | `DG M<n>: …` (one packet per motor) |
+| `I` | yes: full init, selected slots | online flags, mode = position | yes | — | `MOTOR INITIALIZATION: …` |
+| `R` | yes: alarm reset + init | online/fault flags, mode = position | yes | — | `… reset complete` |
 | `MC` | yes, for newly added slots | yes (RAM) | no | no | `MC: …` |
 | `X` | no | all RAM cleared | yes (reboot) | — | `System restart initiated...` then `Motor ready` |
 
@@ -767,7 +930,12 @@ comes back.
 
 ## 12. Status word, drive states and error register
 
-### Status word 0x6041 (what `S`, `SD`, events and `BS` decode)
+### Status word 0x6041 (what `S`, `SD`, `LS`, events and `BS` decode)
+
+Bits 0–9, 11, 14 and 15 mean the same in every mode. **Bits 10, 12 and 13
+are redefined by the drive per operation mode** (manual, 0x6041 table), which
+is why the controller tracks the mode it last commanded and names them
+accordingly.
 
 | Bit | Mask | Flag name (`S:n,FLAGS`) | Meaning when 1 |
 |---|---|---|---|
@@ -781,15 +949,16 @@ comes back.
 | 7 | 0x0080 | `WARN` | warning |
 | 8 | 0x0100 | `HALT` | halted (after `B`) |
 | 9 | 0x0200 | `RUN` | motor running |
-| 10 | 0x0400 | `REACHED` | target reached |
-| 11 | 0x0800 | `SWORIGIN` | origin-switch input active |
-| 12 | 0x1000 | `HOMED` | homing complete |
-| 13 | 0x2000 | `POSERR` | over-position error |
-| 14 | 0x4000 | `CWLIM` | CW limit-switch input active |
-| 15 | 0x8000 | `CCWLIM` | CCW limit-switch input active |
+| 10 | 0x0400 | `REACHED` · `AT_SPEED` · `HOME_REACHED` | position: target reached · velocity: target speed reached · homing: homing position reached |
+| 11 | 0x0800 | `SWORIGIN` | origin-switch (SW) input active — `SW=1` in `LS` |
+| 12 | 0x1000 | `SETPOINT_OK` · `VEL_ZERO` · `HOMED` | position: ready for a new set-point · velocity: speed is 0 · homing: **homing complete** |
+| 13 | 0x2000 | `POSERR` · `MAX_ACCEL` · `HOME_ERROR` | position: over-position error · velocity: maximum acceleration · homing: **homing error** |
+| 14 | 0x4000 | `CWLIM` | CW limit-switch input active — `CW=1` in `LS` |
+| 15 | 0x8000 | `CCWLIM` | CCW limit-switch input active — `CCW=1` in `LS` |
 
 Typical values: `0x1437` enabled and idle at target · `0x1637` enabled and
-running · `0x4437` idle with the CW limit pressed · `0x1438`/`0x…F` fault.
+running · `0x4437` idle with the CW limit pressed · `0x1c37` idle on the
+origin switch · `0x1438`/`0x…F` fault.
 
 ### Drive state (low nibble, shown by `S:…,STATE` and `SD`)
 
@@ -827,14 +996,18 @@ Every `ERR:` string the controller can send, and what to fix.
 | `ERR:P needs positions` | `P:` / `PR:` with no argument |
 | `ERR:no positions` | every field empty, e.g. `P:,,` |
 | `ERR:no '?' fields in P query` | a `?` was in the argument but not in a valid slot |
-| `ERR:PA needs position` | `PA:` with no argument |
+| `ERR:PA needs position` · `ERR:PRA needs delta` | `PA:` / `PRA:` with no argument |
 | `ERR:V needs argument` | `V:` with no argument |
 | `ERR:VA needs velocity` | `VA:` with no argument |
 | `ERR:VA range 0-1000 rps` | negative or absurd speed |
-| `ERR:AD range 0.1..6553.5 rps/s` | zero, negative or too large ramp |
+| `ERR:VS no motors selected (e.g. VS:1,,1)` | selector fields all empty |
+| `ERR:AD range 0.1..6553.5 rps/s (Mn)` | zero, negative or too large ramp in slot n |
+| `ERR:AD needs values (…)` | `AD:` with only empty slots |
+| `ERR:ADA range 0.1..6553.5 rps/s` | zero, negative or too large ramp |
 | `ERR:B type is B, B1, B2 or B3` | `B4`, `B9`… |
 | `ERR:B no motors selected (e.g. B2:1,,1)` | selector fields all empty |
 | `ERR:L no motors selected (e.g. L:1,,1)` | as above |
+| `ERR:BS no motors selected (e.g. BS:1,,1)` · `ERR:ZS …` · `ERR:LS …` · `ERR:I …` | as above |
 | `ERR:Z no motors selected (e.g. Z:1,,1)` | as above |
 | `ERR:ZO needs values` · `ERR:no values` | `ZO:` empty / all fields empty |
 | `ERR:HV needs argument` | `HV:` empty |
@@ -844,7 +1017,7 @@ Every `ERR:` string the controller can send, and what to fix.
 | `ERR:S motor 0..n` | motor number above the configured count |
 | `ERR:S formats RAW\|COMPACT\|DETAIL\|STATE\|BITS\|FLAGS` | misspelt format |
 | `ERR:no '?' fields in SD query` · `ERR:SD use SD, SD:? or SD:1..n` | bad `SD` argument |
-| `ERR:DG usage DG:1..n` | missing or out-of-range motor number |
+| `ERR:DG usage DG, DG:all or DG:1..n` | out-of-range motor number |
 | `ERR:R no motors selected (e.g. R:1,,1)` | selector fields all empty |
 | `ERR:MC range 1..32` | count out of range |
 
@@ -868,7 +1041,7 @@ S:0,COMPACT           → M1:RUN|STP|TR|POS=0|VEL=0.0,M2:…
 
 ```
 V:0.5,0.5,0.5         → Set V: 0.50,0.50,0.50       speed for the next move
-AD:0.3                → AD: all motors accel=0.3 decel=0.3 rps/s
+ADA:0.3               → ADA: all motors accel=0.3 decel=0.3 rps/s
 P:4000,8000,12000     → OK                            launched, synchronised
 S:0,COMPACT           → …|MOV|NR|…                    still moving
 S:0,COMPACT           → …|STP|TR|…                    arrived
@@ -890,8 +1063,24 @@ P:0                   → OK
 HV:0.2                → Set Motor 1 HV: 0.20          slow search speed
 HO:1000               → HO: M1=1000 steps after sensor (used at next homing)
 H3:1                  → Homing method 3 started for M1
-S:1,FLAGS             → M1:…|HOMED|…                  poll until HOMED appears
+                      ← EVENT:ORIGIN:M1:ON POS=-3120 ST=0x1e37   (switch found)
+                      ← EVENT:HOMED:M1 POS=0 ST=0x1437           (done)
+LS:1                  → LIMITS: M1:CW=0 CCW=0 SW=0 HOMED=1 MODE=HOM
 P:?                   → M1=0
+```
+
+If `EVENT:HOMING_ERROR:M1 …` arrives instead, check the switch wiring and
+polarity (drive P42), lower `HV`, then `R:1` and retry.
+
+### Home every axis at once, then set per-axis ramps
+
+```
+HVA:0.2               → Set HV: 0.2,0.2,0.2,0.2,0.2,0.2
+HOA:500               → HO: M1=500,…,M6=500 steps after sensor (used at next homing)
+H3                    → Homing method 3 started for all motors
+                      ← EVENT:HOMED:M1 … EVENT:HOMED:M6 (one per motor, any order)
+LS                    → LIMITS: M1:… HOMED=1 …,M6:… HOMED=1 …
+AD:0.2,0.2,0.5/0.2,0.5/0.2,0.1,0.1   → AD: M1=0.2/0.2,…,M6=0.1/0.1 rps/s (accel/decel)
 ```
 
 ### Recover from a fault

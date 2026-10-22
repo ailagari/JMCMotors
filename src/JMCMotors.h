@@ -26,14 +26,20 @@
 
     void loop() { jmc.run(); }               // non-blocking: commands + monitor
 
-  That's the whole sketch - the full UDP command system is then live:
-    P / PA   position moves + positional '?' queries
-    S / SD   status (raw formats / detailed human-readable)
-    B / L / BS   brakes
-    Z / ZO / ZS  zero & position redefinition
-    R / I / X    reset / detect / reboot
-    V / VA / VS / HV / H<m>  velocity & homing extensions
-  ...plus automatic EVENT push (limit switches, faults, online/offline).
+  That's the whole sketch - the full UDP command system is then live.
+  Every motor command exists in a per-motor form (positional slots:
+  field N = motor N, empty = skip) and an all-motors form:
+    P / PR / PA / PRA   position moves (abs / rel; A = all motors) + '?' queries
+    V / VA / VS         run speed (per motor / all) ; VS[:sel] jog
+    AD / ADA            accel+decel per motor / all
+    S / SD / LS / BS / ZS / DG   status: formats, detailed, limits+sensors,
+                                 brakes, zero, register dump
+    B[0-3] / L          stop (4 types) / loosen brakes
+    Z / ZO / ZOA        zero & position redefinition
+    HV / HVA / HO / HOA / H1..H12   homing speed, offset, start
+    R / I / MC / X      reset / detect / motor count / reboot
+  ...plus automatic EVENT push: limit switches (CW/CCW), origin switch,
+  homing complete / error, faults, online/offline.
 
   Networking is static, no pairing/auto-discovery: set both the
   controller's own IP/port and the PC's IP/port with setNetwork() (or
@@ -282,8 +288,9 @@ class JMCMotor {
 //  JMCController - N motors + Ethernet UDP command system + event monitor
 //==============================================================================
 //  Implements the JMC_CONTROLLINO_V3 command set over UDP and a non-blocking
-//  background monitor that pushes EVENT packets (limit switches, faults,
-//  online/offline) to the PC. See README for the full command reference.
+//  background monitor that pushes EVENT packets (CW/CCW limit switches,
+//  origin switch, homing complete/error, faults, online/offline) to the PC.
+//  See extras/PROTOCOL.md for the full command reference.
 //==============================================================================
 
 class JMCController {
@@ -328,6 +335,9 @@ class JMCController {
     // the sketch hardcode per-motor values instead: they are re-applied on
     // every boot and whenever a drive comes back online. Call before or
     // after begin(); runtime commands can still override until next reboot.
+    // A value <= 0 means "use the global default" (a 0 velocity would be a
+    // motor that never moves - the typical mistake of a settings table with
+    // fewer rows than motors).
     void setMotorVelocity(uint8_t motorId, float rps);        // run speed
     void setMotorHomingVelocity(uint8_t motorId, float rps);  // homing speed
     void setMotorHomingOffset(uint8_t motorId, long steps);   // past sensor
@@ -362,6 +372,19 @@ class JMCController {
       uint8_t  failCnt;
       uint16_t status;
       bool     cw, ccw, fault, zeroSet;
+      // Status bits 10/12/13 change meaning with the drive's operation mode
+      // (manual, 0x6041 table): bit12 is "homing complete" ONLY in homing
+      // mode - in position mode it means "ready for a new set-point". So the
+      // controller remembers the mode it last commanded and decodes
+      // accordingly. 'sw' is the origin-switch input (bit11), 'homed' is
+      // latched when a homing run completes and cleared by a drive re-init.
+      uint8_t  mode;             // JMCMotor::OperationMode last commanded
+      bool     sw;               // origin switch input (bit11) last seen
+      bool     homed;            // a homing run completed since last re-init
+      bool     homingArmed;      // H<n> issued, waiting for completion
+      bool     homingBusySeen;   // bit12 observed low after the start
+      bool     homeErr;          // homing error (bit13 in homing mode) seen
+      uint32_t homingStart;      // millis() when H<n> was issued
     };
 
     // A P/PR/PA that arrives while motors are jogging cannot be launched right
@@ -414,7 +437,14 @@ class JMCController {
     uint16_t  _senderPort = 0;             // 0 = no command received yet
     void sendTo(IPAddress ip, uint16_t port, const String& msg);
     void reply(const String& msg);
+    void reply(const __FlashStringHelper* msg) { reply(String(msg)); }
     void pushEvent(const String& msg) { sendTo(_pcIp, _pcPort, msg); }
+    void pushEvent(const __FlashStringHelper* msg) { sendTo(_pcIp, _pcPort, String(msg)); }
+    // Long per-motor lists go out in several packets so a 32-motor reply never
+    // needs a kilobyte of String on an 8 KB AVR. Returns true when a packet
+    // was sent and 'out' restarted with the header (caller resets separators).
+    static const uint16_t REPLY_CHUNK_CHARS = 300;
+    bool flushIfLong(String& out, const __FlashStringHelper* header);
 
     // Parsing helpers
     int  parseFields(const String& csv, long* value, bool* active);
@@ -439,11 +469,16 @@ class JMCController {
     void serviceMonitor();
     bool initMotorSlot(uint8_t i);   // allocate + probe + init one motor slot
 
+    // Mode bookkeeping for the mode-aware status decode (see MotorCache).
+    void noteMode(const bool* sel, uint8_t mode);
+    void noteModeOne(uint8_t i, uint8_t mode);
+    String sameValueForAll(const String& value);   // "v,v,v,..." for _count motors
+
     // Command handlers (JMC_CONTROLLINO_V3)
     void handlePosition(const String& args, bool absolute);
     void handlePositionQuery(const String& args);
     void replyPositions(const bool* sel);
-    void handlePositionAll(const String& args);
+    void handlePositionAll(const String& args, bool absolute);
     void handleStatus(const String& args);
     void handleStatusDetail(const String& args);
     void sendHumanStatus(int i);
@@ -451,19 +486,22 @@ class JMCController {
     String compactStatus(int i);
     void handleBrake(const String& head, const String& args);
     void handleLoosen(const String& args);
-    void handleBrakeStatus();
+    void handleBrakeStatus(const String& args);
     void handleZero(const String& args);
     void handleZeroOffset(const String& args);
-    void handleZeroStatus();
+    void handleZeroStatus(const String& args);
+    void handleLimitStatus(const String& args);
     void handleReset(const String& args);
-    void handleInit();
+    void handleInit(const String& args);
     void handleMotorCount(const String& args);
     void handleDiagnose(const String& args);
+    void sendDiagnose(uint8_t i);
     void handleAccelDecel(const String& args);
+    void handleAccelDecelAll(const String& args);
     // Extensions
     void handleVelocity(const String& args);
     void handleVelocityAll(const String& args);
-    void handleVelocityStart();
+    void handleVelocityStart(const String& args);
     void handleHomingVelocity(const String& args);
     void handleHomingOffset(const String& args);
     void handleHoming(const String& head, const String& args);

@@ -192,7 +192,9 @@ MotorSettings MOTOR[MOTOR_COUNT] = {
 Values in the sketch are **re-applied on every boot and whenever a drive
 comes back online**, so they survive power failures. Values changed at
 runtime with `V`, `AD`, `HV`, `HO`, `MC` last only until the next reboot —
-use them to find the right numbers, then copy them into the sketch.
+use them to find the right numbers, then copy them into the sketch. The
+table may have fewer rows than `MOTOR_COUNT`: motors without a row (or with
+a 0 in a row) use the `GLOBAL_*` values.
 
 ### Homing offset and drive-unit quirk (optional)
 
@@ -265,7 +267,7 @@ B                     stop
 ### 7.3 Ramps
 
 ```
-AD:0.2                → AD: all motors accel=0.2 decel=0.2 rps/s
+AD:0.2                → AD: M1=0.2/0.2 rps/s (accel/decel)     (ADA:0.2 for all motors)
 P:20000               → OK
 ```
 
@@ -290,20 +292,37 @@ Or, if the origin is a known coordinate, `ZO:<value>`.
 HV:0.2                → Set Motor 1 HV: 0.20
 HO:1000               → HO: M1=1000 steps after sensor (used at next homing)
 H3:1                  → Homing method 3 started for M1      (3 = origin switch via CW)
-S:1,FLAGS             → poll until HOMED appears
+                      ← EVENT:ORIGIN:M1:ON POS=… ST=…      (switch found)
+                      ← EVENT:HOMED:M1 POS=0 ST=0x1437       (done)
+LS:1                  → LIMITS: M1:CW=0 CCW=0 SW=0 HOMED=1 MODE=HOM
 P:?                   → M1=0
 ```
 
 Methods 1/2 home to the CW/CCW limit switch, 3/4 to the origin switch
-approaching CW/CCW, 5–12 are the fast back-off variants. Homing completion is
-not pushed as an event — poll `S:1,FLAGS` or `SD:?`.
+(reversing at the CW/CCW limit if they meet it first), 5–12 are the fast
+back-off variants; 9–12 accept a negative `HO`. The full table is in
+[PROTOCOL.md](PROTOCOL.md#h1--h12--start-homing). Completion arrives as
+`EVENT:HOMED`, failure as `EVENT:HOMING_ERROR` (check switch wiring and
+polarity, lower `HV`, then `R:1` and retry). `LS` shows the live state
+(`HOMED=BUSY` while running).
 
-### 7.6 Limit switches
+To home every axis in one go: `HVA:0.2`, `HOA:500`, `H3` — one `EVENT:HOMED`
+per motor follows.
 
-Press each limit switch by hand with the motor standing. The PC listening on
-`PC_PORT` must receive `EVENT:LIMIT:M1:CW POS=… ST=…` and, on release,
-`EVENT:LIMIT:M1:CW_CLEARED`. If the event shows with the switch *released*,
-the polarity (P42) is wrong.
+### 7.6 Limit and origin switches
+
+With the motor standing, press each switch by hand. The PC listening on
+`PC_PORT` must receive:
+
+| Switch | On press | On release |
+|---|---|---|
+| CW limit | `EVENT:LIMIT:M1:CW POS=… ST=…` | `EVENT:LIMIT:M1:CW_CLEARED` |
+| CCW limit | `EVENT:LIMIT:M1:CCW POS=… ST=…` | `EVENT:LIMIT:M1:CCW_CLEARED` |
+| origin (SW) | `EVENT:ORIGIN:M1:ON POS=… ST=…` | `EVENT:ORIGIN:M1:OFF` |
+
+`LS:1` shows the same three inputs as `CW=`, `CCW=`, `SW=`. If an input
+reads active with the switch *released*, the polarity (P42) is wrong or the
+wire is open.
 
 ### 7.7 Know the fault path
 
@@ -410,6 +429,7 @@ the limit.
 | Motor replies `OK` but does not move | `DG:n` → `vel6081=0,0`? `mode6061` not 1? `err1001` non-zero? `WRITE10=EXCEPTION`? | send `V`, `R`, or check the drive's enable input; report the `DG` line |
 | Motor runs 10× too fast | drive P45 velocity unit | `jmc.setDriveP45(0)` in the sketch |
 | A limit shows `*** ACTIVE ***` with nothing pressed | P42 polarity, or the input wire is open | set P42 to match PNP/NPN sensors; check wiring |
+| `EVENT:HOMING_ERROR` after `H<n>` | the method's switch is not wired or has the wrong polarity, `HV` too fast for the method's limit, `HO` pushes past a limit | check `LS` while pressing the switches, fix P42, lower `HV`, `R:…`, retry |
 | `EVENT:FAULT … OVERPOS` on normal moves | mechanism binds, ramps too steep, P16 too tight | lower `AD`, raise P19, check the load, adjust P16 |
 | `EVENT:FAULT … CURRENT` at start | stall, short, wrong motor phase wiring | check the motor cable and load |
 | `EVENT:OFFLINE` / `ONLINE` flapping | loose RS-485 connector, marginal power | reseat connectors; check the motor supply under load |
