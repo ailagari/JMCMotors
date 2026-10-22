@@ -18,7 +18,7 @@ html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
 a{color:var(--acc-dark);text-decoration:none}a:hover{text-decoration:underline}
 code,pre,kbd,.mono{font-family:var(--mono)}
-code{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:.05em .4em;font-size:.9em;white-space:nowrap;color:#2b2520}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:.05em .4em;font-size:.9em;white-space:normal;overflow-wrap:anywhere;color:#2b2520}
 pre{background:#1c1a18;color:#f3eee8;border-radius:12px;padding:14px 16px;overflow:auto;font-size:.88em;line-height:1.55;margin:10px 0}
 pre code{background:none;border:0;padding:0;white-space:pre;color:inherit}
 h1,h2,h3,h4{line-height:1.15;margin:0 0 .45em;letter-spacing:-.015em}
@@ -139,14 +139,25 @@ details.fold summary:before{content:"+";color:var(--acc);font-weight:800;width:1
 details.fold[open] summary:before{content:"–"}
 details.fold>*:not(summary){margin-bottom:14px}
 footer{padding:40px 0 60px;color:var(--muted);font-size:.9rem;border-top:1px solid var(--line)}
-.hero .grid>*,.builder>*,.console>*{min-width:0}
+.hero .grid>*,.builder>*,.console>*,.cards>*,.steps>*{min-width:0}
+body{overflow-x:hidden}
+.tbl-wrap{max-width:100%}
+.field{max-width:100%;min-width:0}
+select,input[type=text]{max-width:100%}
+.cmd .body,.card,.panel,details.fold{overflow-wrap:anywhere}
+.cmd .body .tbl-wrap{overflow-x:auto}
 @media (max-width:900px){.hero .grid,.builder,.console{grid-template-columns:1fr}.bits{grid-template-columns:repeat(8,1fr)}
   header.top .wrap{height:auto;flex-wrap:wrap;padding:10px 20px}
   nav.main{margin-left:0;width:100%;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;order:3}
   nav.main a{white-space:nowrap;padding:6px 9px;font-size:.88rem}
   header.top .btn{margin-left:auto}}
+.bit span{display:block;overflow-wrap:anywhere}
+#d-flags,#d-compact,#d-state{overflow-wrap:anywhere;word-break:break-all}
 @media (max-width:640px){
   section{padding:48px 0}.hero{padding:40px 0 32px}
+  .bits{grid-template-columns:repeat(4,1fr)}
+  .bit{font-size:.62rem}
+  .cmdline{flex-wrap:wrap}.cmdline input{min-width:0;flex:1 1 100%}
   .cmd-tools{position:static}
   .term{height:280px}
 }
