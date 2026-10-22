@@ -1,6 +1,7 @@
 /*
   JMCMotors_DirectAPI - drive a motor from C++ without the UDP layer.
   Part of JMCMotors (MIT) by LAGARI A - https://github.com/ailagari/JMCMotors
+  Interactive command reference: https://ailagari.github.io/JMCMotors/
 
   Uses the two lower layers directly: JMCBus (Modbus-RTU over the Controllino
   RS-485 port) and JMCMotor (one drive). No Ethernet, no command parser -

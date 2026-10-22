@@ -4,6 +4,8 @@
   https://github.com/ailagari/JMCMotors
 
   How to use + command list: README.md
+  Interactive reference:     https://ailagari.github.io/JMCMotors/
+                             (every command, replies, a builder and a simulator)
   Full protocol reference:   extras/PROTOCOL.md
   Drive setup & bring-up:    extras/HARDWARE.md
 

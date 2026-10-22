@@ -4,6 +4,7 @@
   Author : LAGARI A <lagariscience@gmail.com>
   License: MIT
   Repo   : https://github.com/ailagari/JMCMotors
+  Docs   : https://ailagari.github.io/JMCMotors/  (interactive command reference)
 
   Complete control stack for integrated servo/stepper drives (IHSS/IHT
   "-RC" series) over Modbus-RTU / RS-485, with a ready-to-use UDP command
