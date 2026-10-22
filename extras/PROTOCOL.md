@@ -206,6 +206,9 @@ reason is one of the bus result names: `TIMEOUT`, `CRC`, `EXCEPTION`,
    by broadcast, so all motors run at **motor 1's `V` speed**.
 3. The new target takes effect **immediately** (control-word bit 5): a `P`
    sent mid-move abandons the move in flight and heads to the new target.
+   Per the manual the drive latches a target on the bit-4 edge only while
+   status bit 12 ("can set new position") is 1, so the controller waits for
+   that bit (up to 100 ms) before pulsing; an idle drive has it set already.
 4. `OK` means "launched", not "arrived". Watch `S:n:COMPACT` (`TR` = target
    reached) to know when the motor is there.
 
@@ -263,9 +266,11 @@ mix values and ?`.
 | `VSA` | all motors jog at their `V` speeds, broadcast start | `VS: velocity mode started (stop with B)` |
 | `VS:1,,1` · `VS:M1,M3` | motors 1 and 3 only | `VS: velocity mode started for M1,3 (stop with B)` |
 
-**What it triggers**: cancels any deferred move, writes each selected motor's
-own speed and switches it to velocity mode, then one broadcast enable + start
-when every motor is selected, or a per-motor enable + start for a subset.
+**What it triggers**: cancels any deferred move; per selected motor, following
+the manual's velocity-mode routine: halt (0x010F), select velocity mode, write
+the motor's own speed, so nothing turns yet; then one broadcast release
+(0x000F) when every motor is selected, so all shafts start in the same
+instant, or a per-motor release for a subset.
 Velocity mode consumes no position range: use it for anything that spins
 forever. **Leaving it**: `B` (any type) stops it; `P`/`PR`, `Z`, `ZO` and
 `H<n>` brake on the `DEC` ramp first (see §4). **Errors**: `ERR:VS needs motor
@@ -296,7 +301,7 @@ The **stop type is the digit in the head**; the argument selects motors.
 
 | Head | Stop type | How the drive stops |
 |---|---|---|
-| `B` (= `B0`) | controlled stop | halt bit: ramps down on the normal `DEC` ramp; the jog setpoint is zeroed so the motor cannot resume when halt is released |
+| `B` (= `B0`) | controlled stop | halt bit: ramps down on the normal `DEC` ramp (the controller sets the drive's halt code 0x605D to 1 = "halt with the current deceleration" at every init); the jog setpoint is zeroed so the motor cannot resume when halt is released |
 | `B1` | quick stop, decel ramp | quick-stop code 1: decelerate on the normal ramp, then hold |
 | `B2` | fast brake | quick-stop code 2: decelerate on the quick-stop ramp |
 | `B3` | immediate | quick-stop code 3: stop at once, no ramp — the emergency stop |
@@ -397,7 +402,9 @@ brackets is the live position.
 | `HVA:0.2` | every motor | `HVA: all motors = 0.20 rps` |
 | `HV:?` · `HVA:?` | read | `HV: M1=0.30 rps` |
 
-Default 0.3 rps. Keep it under the chosen method's maximum (§ `H<n>`).
+Default 0.3 rps. The drive's methods allow at most 300 rpm (methods 1–4) or
+1200 rpm (5–12), so `HV` and `HVZ` accept 0.01–20 rps; keep methods 1–4
+under 5 rps.
 
 ### `HVZ` — homing zero-find speed (rps) · `HVZA`
 
@@ -658,7 +665,7 @@ or SAVE:CLEAR` · `ERR:SAVE EEPROM too small`.
 
 | Send | Reply | Notes |
 |---|---|---|
-| `VER` | `JMCMotors 0.5.0` | check firmware compatibility from the PC |
+| `VER` | `JMCMotors 0.5.1` | check firmware compatibility from the PC |
 | `PING` | `PONG` | cheap link check; no bus traffic |
 | `X` | `System restart initiated...` then `Motor ready` on PC_PORT | soft reset; runtime settings revert to the sketch (or the `SAVE`d block); drive counters untouched |
 
@@ -787,7 +794,7 @@ origin switch.
 | `ERR:<CMD>A takes one value for all motors (e.g. <CMD>A:1000)` | a comma list after an `A` form |
 | `ERR:<CMD> motor must be M1..M<n>` | `M` name out of range or malformed |
 | `ERR:<CMD> cannot mix values and ?` | `P:1000,?` |
-| `ERR:V range 0.01..1000.0 rps (M2)` · `ERR:ACC range 0.1..6553.5 rps/s (M2)` (same for `DEC`, `HV`, `HVZ`, `HACC`) | value out of range in that slot; nothing written |
+| `ERR:V range 0.01..1000.0 rps (M2)` · `ERR:HV range 0.01..20.0 rps (M2)` (same for `HVZ`) · `ERR:ACC range 0.1..6553.5 rps/s (M2)` (same for `DEC`, `HACC`) | value out of range in that slot; nothing written |
 | `ERR:ZO takes values, not ? (read positions with P:?)` | `ZO:?` |
 | `ERR:B type is B, B1, B2 or B3` | `B4`, `B9`… |
 | `ERR:homing method H1..H12` | `H0`, `H13`… |
@@ -807,7 +814,7 @@ values; those marked `ERROR` did not answer on the bus.
 
 ```
                       ← Motor ready            (arrives on PC_PORT at boot)
-VER                   → JMCMotors 0.5.0
+VER                   → JMCMotors 0.5.1
 IA                    → MOTOR INITIALIZATION: … Total motors detected: 6 of 6
 PA:?                  → M1=0,M2=0,…
 SA:COMPACT            → M1:RUN|STP|TR|POS=0|VEL=0.0,M2:…

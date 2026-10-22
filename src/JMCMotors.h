@@ -58,7 +58,7 @@
 #ifndef JMCMotors_h
 #define JMCMotors_h
 
-#define JMCMOTORS_VERSION "0.5.0"   // reported by the VER command
+#define JMCMOTORS_VERSION "0.5.1"   // reported by the VER command
 
 #include <Arduino.h>
 #include <Ethernet.h>

@@ -278,6 +278,10 @@ JMCResult JMCMotor::begin(float acceleration, float deceleration) {
   ctrl(CW_ENABLE);
   setOperationMode(MODE_POSITION);
   setAccelDecel(_accel, _decel);
+  // Halt code (0x605D): how control-word bit8 stops the motor. The drive's
+  // default 0 is undefined in the manual; 1 = halt on the current
+  // deceleration ramp, which is what the controlled stop (B) promises.
+  _bus.writeSingle(_slave, JMCReg::HALTCODE, 1);
 
   // Safe, slow homing defaults (zero speeds make the drive reject homing).
   setHomingAccel(_accel > 0.0f ? _accel : 5.0f);
@@ -338,7 +342,18 @@ JMCResult JMCMotor::preparePositionMove(long steps, float velocity_rps, bool abs
   return _last;
 }
 
-JMCResult JMCMotor::enableMovement() { return ctrl(_moveBase | CW_SAMPLE_BIT); }
+// Manual, position mode: the new target is acquired on the bit4 0->1 edge
+// only while status bit12 ("can set new position") is 1. An idle drive has
+// it set; one that is still latching the previous set-point may not, so wait
+// briefly for it rather than losing the move. Bounded at ~100 ms.
+JMCResult JMCMotor::enableMovement() {
+  for (uint8_t k = 0; k < 20; k++) {
+    uint16_t s = getStatusWord();
+    if (_last != JMC_OK || (s & 0x1000)) break;
+    delay(5);
+  }
+  return ctrl(_moveBase | CW_SAMPLE_BIT);
+}
 JMCResult JMCMotor::startMovement()  { return ctrl(_moveBase); }
 
 long JMCMotor::getPosition() {
@@ -358,10 +373,16 @@ JMCResult JMCMotor::setTargetVelocity(float velocity_rps) {
   return write32(_slave, JMCReg::TARGET_VEL, spdReg(velocity_rps));
 }
 
+// Manual, velocity mode routine: halt first (0x010F), then select the mode
+// and write the speed, then release halt (0x000F) to start. Entering velocity
+// mode while enabled would start the shaft at whatever 0x6081 still holds
+// (the last profile speed) before the jog speed is written - and it would
+// start at the mode switch instead of at the synchronised launch.
 JMCResult JMCMotor::prepareVelocityMode(float velocity_rps) {
-  setOperationMode(MODE_VELOCITY);
+  ctrl(CW_HALT);                                            // hold while we set up
+  _last = _bus.writeSingle(_slave, JMCReg::MODE, (uint16_t)MODE_VELOCITY);
   setTargetVelocity(velocity_rps);
-  _moveBase = CW_ENABLE;
+  _moveBase = CW_ENABLE;                                    // start = release halt
   _velRunning = true;
   return _last;
 }
@@ -1539,8 +1560,9 @@ void JMCController::handleFloatSetting(FloatSetting which, const String& args, b
     case SET_V:    cmd = F("V");    unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;   // sign = direction
     case SET_ACC:  cmd = F("ACC");  unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
     case SET_DEC:  cmd = F("DEC");  unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
-    case SET_HV:   cmd = F("HV");   unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;
-    case SET_HVZ:  cmd = F("HVZ");  unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;
+    // Manual: homing methods allow at most 300 rpm (1-4) or 1200 rpm (5-12) = 20 rps.
+    case SET_HV:   cmd = F("HV");   unit = F(" rps");   lo = 0.01f;    hi = 20.0f;   break;
+    case SET_HVZ:  cmd = F("HVZ");  unit = F(" rps");   lo = 0.01f;    hi = 20.0f;   break;
     default:       cmd = F("HACC"); unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
   }
   Fields Fv;
