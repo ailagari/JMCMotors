@@ -77,6 +77,12 @@ setMotorVelocity	KEYWORD2
 setMotorHomingVelocity	KEYWORD2
 setMotorHomingOffset	KEYWORD2
 setMotorAccelDecel	KEYWORD2
+setMotorHomingZeroVelocity	KEYWORD2
+setMotorHomingAccel	KEYWORD2
+saveSettings	KEYWORD2
+loadSettings	KEYWORD2
+clearSaved	KEYWORD2
+hasSaved	KEYWORD2
 setHomingAccel	KEYWORD2
 stopVelocityMode	KEYWORD2
 velocityModeRunning	KEYWORD2
@@ -102,3 +108,4 @@ QUICK_STOP_DECEL	LITERAL1
 QUICK_STOP_FAST	LITERAL1
 QUICK_STOP_IMMEDIATE	LITERAL1
 JMC_MAX_MOTORS	LITERAL1
+JMCMOTORS_VERSION	LITERAL1

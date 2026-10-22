@@ -58,6 +58,8 @@
 #ifndef JMCMotors_h
 #define JMCMotors_h
 
+#define JMCMOTORS_VERSION "0.5.0"   // reported by the VER command
+
 #include <Arduino.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -339,10 +341,21 @@ class JMCController {
     // motor that never moves - the typical mistake of a settings table with
     // fewer rows than motors).
     void setMotorVelocity(uint8_t motorId, float rps);        // run speed
-    void setMotorHomingVelocity(uint8_t motorId, float rps);  // homing speed
+    void setMotorHomingVelocity(uint8_t motorId, float rps);  // homing search speed (HV)
+    void setMotorHomingZeroVelocity(uint8_t motorId, float rps); // slow zero-find speed (HVZ; 0 = same as HV)
+    void setMotorHomingAccel(uint8_t motorId, float rps_s);   // homing ramp (HACC; 0 = same as accel)
     void setMotorHomingOffset(uint8_t motorId, long steps);   // past sensor
     // Gentle ramps for geared mechanisms (rps/s; resolution 0.1 rps/s).
     void setMotorAccelDecel(uint8_t motorId, float accel_rps_s, float decel_rps_s);
+
+    // ---- Saved settings (SAVE / LOAD commands, Controllino EEPROM) --------
+    // V, ACC, DEC, HV, HVZ, HACC, HO and the motor count. When a saved block
+    // exists it is applied in begin() AFTER the sketch values, so SAVE:CLEAR
+    // (or clearSaved()) returns the unit to what the sketch says.
+    bool saveSettings();        // write the live values; false = EEPROM too small
+    bool loadSettings();        // apply a saved block; false = none stored
+    void clearSaved();
+    bool hasSaved();
 
     // ---- Lifecycle ----------------------------------------------------------
     // Brings up RS-485 (Controllino mode), Ethernet/UDP and all motors.
@@ -357,6 +370,15 @@ class JMCController {
     JMCMotor* motor(uint8_t index);                    // 0-based, NULL if bad
     JMCBus&   busRef() { return _bus; }
     uint8_t   motorCount() const { return _count; }
+
+    // Parsed per-motor value fields (P, V, ZO, HV, HO, ACC, DEC, HVZ, HACC).
+    struct Fields {
+      bool  active[JMC_MAX_MOTORS];        // slot carries something
+      bool  query[JMC_MAX_MOTORS];         // that something is '?'
+      long  l[JMC_MAX_MOTORS];
+      float f[JMC_MAX_MOTORS];
+      int   n, nq;                         // active count, query count
+    };
 
   private:
     // Monitor timing. Limit-switch latency ~= count x (tick + ~5 ms read):
@@ -421,9 +443,13 @@ class JMCController {
     float _defVel   = 0.3f, _defHomingVel = 0.3f;
     float _speedScale = 10.0f;             // counts per rps (Modbus manual: rps x 10)
     float _homingVel[JMC_MAX_MOTORS];      // per-motor homing speed (NAN = default)
+    float _homingZeroVel[JMC_MAX_MOTORS];  // slow zero-find speed (NAN = follow HV)
+    float _homingAccel[JMC_MAX_MOTORS];    // homing ramp rps/s (NAN = follow accel)
     float _accelSet[JMC_MAX_MOTORS];       // per-motor accel rps/s (NAN = default)
     float _decelSet[JMC_MAX_MOTORS];       // per-motor decel rps/s (NAN = default)
     long  _homingOffset[JMC_MAX_MOTORS];   // steps after sensor trigger (HO cmd)
+    bool  _chunked = false;                // this reply already spilled into :MORE packets
+    void applyHomingParams(uint8_t i);     // write HV/HVZ/HACC/HO of motor i to its drive
 
     PendingMove _pending;
     uint32_t _lastTick = 0;
@@ -444,12 +470,16 @@ class JMCController {
     // needs a kilobyte of String on an 8 KB AVR. Returns true when a packet
     // was sent and 'out' restarted with the header (caller resets separators).
     static const uint16_t REPLY_CHUNK_CHARS = 300;
-    bool flushIfLong(String& out, const __FlashStringHelper* header);
+    bool flushIfLong(String& out, const String& header);
 
-    // Parsing helpers
-    int  parseFields(const String& csv, long* value, bool* active);
-    // Positional motor selection (P-style) shared by B, H, L, Z, R.
-    int  parseSelection(const String& csv, bool* sel);
+    // Parsing (v0.5 grammar): CMD:<slots or M-names> = individual motors,
+    // CMDA[:value] = all motors. See parseValues / parseSelection.
+    int  parseValues(const String& csv, Fields& F, bool all);
+    int  parseSelection(const String& csv, bool* sel, bool all);
+    bool selectionError(const __FlashStringHelper* cmd, int n);   // replies ERR, true if n <= 0
+    bool valuesError(const __FlashStringHelper* cmd, int n, bool all);
+    static bool isMotorCommand(const String& base);
+    String replyChunkEnd(const String& out);   // appends :END when the reply was chunked
 
     // Velocity -> position/homing handoff: ramp the selected motors down
     // together on their decel ramps, so no drive gets a dead-stop mode
@@ -472,39 +502,36 @@ class JMCController {
     // Mode bookkeeping for the mode-aware status decode (see MotorCache).
     void noteMode(const bool* sel, uint8_t mode);
     void noteModeOne(uint8_t i, uint8_t mode);
-    String sameValueForAll(const String& value);   // "v,v,v,..." for _count motors
 
-    // Command handlers (JMC_CONTROLLINO_V3)
-    void handlePosition(const String& args, bool absolute);
-    void handlePositionQuery(const String& args);
+    // Command handlers (v0.5). 'all' = the A-suffixed form was used.
+    void handlePosition(const String& args, bool absolute, bool all);
     void replyPositions(const bool* sel);
-    void handlePositionAll(const String& args, bool absolute);
-    void handleStatus(const String& args);
-    void handleStatusDetail(const String& args);
-    void sendHumanStatus(int i);
-    void sendDetailStatus(int i);
+    void handleStatus(const String& args, bool all);
+    void handleStatusDetail(const String& args, bool all);
+    String humanStatus(int i);
+    String detailStatus(int i);
     String compactStatus(int i);
-    void handleBrake(const String& head, const String& args);
-    void handleLoosen(const String& args);
-    void handleBrakeStatus(const String& args);
-    void handleZero(const String& args);
-    void handleZeroOffset(const String& args);
-    void handleZeroStatus(const String& args);
-    void handleLimitStatus(const String& args);
-    void handleReset(const String& args);
-    void handleInit(const String& args);
+    void   replyMulti(const String& packet, bool last);   // :MORE / :END markers
+    void handleBrake(int type, const String& args, bool all);
+    void handleLoosen(const String& args, bool all);
+    void handleBrakeStatus(const String& args, bool all);
+    void handleZero(const String& args, bool all);
+    void handleZeroOffset(const String& args, bool all);
+    void handleZeroStatus(const String& args, bool all);
+    void handleLimitStatus(const String& args, bool all);
+    void handleReset(const String& args, bool all);
+    void handleInit(const String& args, bool all);
     void handleMotorCount(const String& args);
-    void handleDiagnose(const String& args);
-    void sendDiagnose(uint8_t i);
-    void handleAccelDecel(const String& args);
-    void handleAccelDecelAll(const String& args);
-    // Extensions
-    void handleVelocity(const String& args);
-    void handleVelocityAll(const String& args);
-    void handleVelocityStart(const String& args);
-    void handleHomingVelocity(const String& args);
-    void handleHomingOffset(const String& args);
-    void handleHoming(const String& head, const String& args);
+    void handleDiagnose(const String& args, bool all);
+    String diagnose(uint8_t i);
+    // Per-motor float settings sharing one handler: V, ACC, DEC, HV, HVZ, HACC.
+    enum FloatSetting : uint8_t { SET_V, SET_ACC, SET_DEC, SET_HV, SET_HVZ, SET_HACC };
+    void handleFloatSetting(FloatSetting which, const String& args, bool all);
+    void handleVelocityStart(const String& args, bool all);
+    void handleHomingOffset(const String& args, bool all);
+    void handleHoming(int method, const String& args, bool all);
+    void handleSave(const String& args);
+    void handleLoad();
 };
 
 #endif // JMCMotors_h

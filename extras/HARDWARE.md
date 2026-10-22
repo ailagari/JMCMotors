@@ -120,7 +120,7 @@ only — it is not reachable over Modbus.
 
 **P19 in practice.** Values 5–8 all work; 7 is field-proven across many
 installations. Check it on every drive: units are sometimes found at 0 (no
-smoothing at all). Combine with a gentle ramp (`AD:0.1`) for the kindest
+smoothing at all). Combine with a gentle ramp (`ACCA:0.1`, `DECA:0.1`) for the kindest
 drivetrain treatment.
 
 ---
@@ -223,11 +223,11 @@ a 0 in a row) use the `GLOBAL_*` values.
    seconds of boot `Motor ready` must arrive. If it does not: check `PC_IP`,
    the subnet, and the Windows Firewall (inbound UDP is blocked on networks
    marked "Public").
-3. Send `I` to `CONTROLLINO_IP:CONTROLLINO_PORT`. Expect
+3. Send `IA` to `CONTROLLINO_IP:CONTROLLINO_PORT`. Expect
    `Total motors detected: N of N` and `SUCCESS: All expected motors detected
    and initialized!`. A `NOT DETECTED (TIMEOUT)` line names the slot to fix
    (P43, ID, baud, wiring — §11).
-4. Send `S:0,COMPACT`. Every motor should show `RUN|STP|TR` (enabled, standing,
+4. Send `SA:COMPACT`. Every motor should show `RUN|STP|TR` (enabled, standing,
    at target) and `POS=0`.
 
 ---
@@ -253,21 +253,21 @@ command.
 ### 7.2 Speed-scale verification (once per drive type)
 
 ```
-V:1                   1 rps commanded
-VS                    run; count shaft revolutions for 60 s
+V:1                   1 rps commanded (motor 1; VA:1 for all)
+VSA                   run; count shaft revolutions for 60 s
 B                     stop
 ```
 
 - Exactly 60 revolutions → scaling is correct; decimals work (`V:0.3` = 18 RPM).
 - About 600 (10× fast) → that drive uses whole-rps units: add
   `jmc.setDriveP45(0)` to the sketch (speeds then resolve in whole rps only).
-- No movement → `DG:1` and look at `vel6081`: if it reads `0,0` the speed
+- No movement → `DG:M1` and look at `vel6081`: if it reads `0,0` the speed
   did not reach the drive; report the full `DG` output.
 
 ### 7.3 Ramps
 
 ```
-AD:0.2                → AD: M1=0.2/0.2 rps/s (accel/decel)     (ADA:0.2 for all motors)
+ACC:0.2               → Set ACC: M1=0.20 rps/s        (ACCA:0.2 for all; DEC / DECA likewise)
 P:20000               → OK
 ```
 
@@ -276,12 +276,12 @@ until it is gone. Then copy the values into the sketch.
 
 ### 7.4 Zero reference
 
-Move the axis to its working origin by hand (`L:1` frees the shaft; the
+Move the axis to its working origin by hand (`L:M1` frees the shaft; the
 next command that needs torque re-enables the drive) or with `PR`, then:
 
 ```
-Z:1                   → Motor 1 set to zero position
-ZS                    → ZERO STATUS: M1:ZERO(0),…
+Z:M1                  → Motor 1 set to zero position
+ZS:M1                 → ZERO STATUS: M1:ZERO(0) | ALL_ZERO_SET
 ```
 
 Or, if the origin is a known coordinate, `ZO:<value>`.
@@ -289,12 +289,12 @@ Or, if the origin is a known coordinate, `ZO:<value>`.
 ### 7.5 Homing (if the axis has an origin or limit switch)
 
 ```
-HV:0.2                → Set Motor 1 HV: 0.20
+HV:0.2                → Set HV: M1=0.20 rps
 HO:1000               → HO: M1=1000 steps after sensor (used at next homing)
-H3:1                  → Homing method 3 started for M1      (3 = origin switch via CW)
+H3:M1                 → Homing method 3 started for M1      (3 = origin switch via CW)
                       ← EVENT:ORIGIN:M1:ON POS=… ST=…      (switch found)
                       ← EVENT:HOMED:M1 POS=0 ST=0x1437       (done)
-LS:1                  → LIMITS: M1:CW=0 CCW=0 SW=0 HOMED=1 MODE=HOM
+LS:M1                 → LIMITS: M1:CW=0 CCW=0 SW=0 HOMED=1 MODE=HOM
 P:?                   → M1=0
 ```
 
@@ -303,10 +303,10 @@ Methods 1/2 home to the CW/CCW limit switch, 3/4 to the origin switch
 back-off variants; 9–12 accept a negative `HO`. The full table is in
 [PROTOCOL.md](PROTOCOL.md#h1--h12--start-homing). Completion arrives as
 `EVENT:HOMED`, failure as `EVENT:HOMING_ERROR` (check switch wiring and
-polarity, lower `HV`, then `R:1` and retry). `LS` shows the live state
+polarity, lower `HV`, then `R:M1` and retry). `LS` shows the live state
 (`HOMED=BUSY` while running).
 
-To home every axis in one go: `HVA:0.2`, `HOA:500`, `H3` — one `EVENT:HOMED`
+To home every axis in one go: `HVA:0.2`, `HOA:500`, `H3A` — one `EVENT:HOMED`
 per motor follows.
 
 ### 7.6 Limit and origin switches
@@ -320,15 +320,15 @@ With the motor standing, press each switch by hand. The PC listening on
 | CCW limit | `EVENT:LIMIT:M1:CCW POS=… ST=…` | `EVENT:LIMIT:M1:CCW_CLEARED` |
 | origin (SW) | `EVENT:ORIGIN:M1:ON POS=… ST=…` | `EVENT:ORIGIN:M1:OFF` |
 
-`LS:1` shows the same three inputs as `CW=`, `CCW=`, `SW=`. If an input
+`LS:M1` shows the same three inputs as `CW=`, `CCW=`, `SW=`. If an input
 reads active with the switch *released*, the polarity (P42) is wrong or the
 wire is open.
 
 ### 7.7 Know the fault path
 
 When a drive faults you will see `EVENT:FAULT:M1 ST=… ERR=… <name>` on
-`PC_PORT`. The routine is: `SD:?` to read the decoded cause, fix it (jam,
-load, wiring, supply), then `R:1`; `EVENT:FAULT_CLEARED:M1` confirms the
+`PC_PORT`. The routine is: `SD:M1` to read the decoded cause, fix it (jam,
+load, wiring, supply), then `R:M1`; `EVENT:FAULT_CLEARED:M1` confirms the
 drive is back. Make sure your PC-side application handles this sequence
 before the installation goes live.
 
@@ -360,7 +360,7 @@ Register scaling (×10 per the JMC Modbus manual) is handled inside the library
   you can also change it live with `MC:n` (reverts to the sketch value on
   reboot).
 - **Synchronised launch is broadcast-based**: when a `P:` command addresses
-  every motor (and always for `PA` and `VS`), the arm + start are sent as two
+  every motor (and always for `PA` and `VSA`), the arm + start are sent as two
   single broadcast frames (slave 0) — all drives start in the same instant,
   with no per-motor stagger even at 32 motors. Partial selections launch per
   motor (~5 ms apart each).
@@ -398,7 +398,7 @@ the limit.
 
 1. **Counter wrap.** An application that rotates endlessly in one direction
    (e.g. a display turntable) will eventually pass +2,147,483,647 and wrap to
-   negative — the drive gives no warning. Use **velocity mode** (`VS`) for
+   negative — the drive gives no warning. Use **velocity mode** (`VSA`) for
    endless rotation (it consumes no position range), or periodically re-zero
    at a known point (`Z` / homing) to pull the counter back.
 2. **Accuracy is closed-loop, not count-limited.** These are stepper-servos
@@ -433,7 +433,7 @@ the limit.
 | `EVENT:FAULT … OVERPOS` on normal moves | mechanism binds, ramps too steep, P16 too tight | lower `AD`, raise P19, check the load, adjust P16 |
 | `EVENT:FAULT … CURRENT` at start | stall, short, wrong motor phase wiring | check the motor cable and load |
 | `EVENT:OFFLINE` / `ONLINE` flapping | loose RS-485 connector, marginal power | reseat connectors; check the motor supply under load |
-| `P` after `VS` answers late or not at all | the controller is braking the jog on the `AD` decel ramp first (`OK` is sent when the move starts) | send `B` before repositioning, or use a steeper decel |
+| `P` after `VS` answers late or not at all | the controller is braking the jog on the `DEC` ramp first (`OK` is sent when the move starts) | send `B` before repositioning, or use a steeper decel |
 | Settings forgotten after power loss | `V`/`AD`/`HV`/`HO`/`MC` are runtime only | put them in the sketch |
 | Positions are 0 after a drive power cycle | the drive's counter reset | re-home or `ZO:<known value>` |
 | `L:2` loosened motor 1 | selector commands are positional | `L:,1` for motor 2 |

@@ -4,6 +4,7 @@
 ==============================================================================*/
 #include "JMCMotors.h"
 #include <Controllino.h>
+#include <EEPROM.h>
 #include <math.h>
 
 //==============================================================================
@@ -614,12 +615,14 @@ JMCController::JMCController(HardwareSerial& rs485Serial) : _bus(rs485Serial) {
   _pcIp    = IPAddress(192, 168, 1, 100);
   for (uint8_t i = 0; i < JMC_MAX_MOTORS; i++) {
     _m[i] = nullptr;
-    _storedVel[i]    = NAN;   // NAN = "not hardcoded" -> default applied at init
-    _homingVel[i]    = NAN;
-    _accelSet[i]     = NAN;
-    _decelSet[i]     = NAN;
-    _homingOffset[i] = 0;
-    _offlineTry[i]   = 0;
+    _storedVel[i]     = NAN;   // NAN = "not hardcoded" -> default applied at init
+    _homingVel[i]     = NAN;
+    _homingZeroVel[i] = NAN;   // NAN = follow HV
+    _homingAccel[i]   = NAN;   // NAN = follow accel
+    _accelSet[i]      = NAN;
+    _decelSet[i]      = NAN;
+    _homingOffset[i]  = 0;
+    _offlineTry[i]    = 0;
     memset(&_cache[i], 0, sizeof(MotorCache));
     _cache[i].mode = JMCMotor::MODE_POSITION;
   }
@@ -680,10 +683,23 @@ void JMCController::setMotorHomingVelocity(uint8_t motorId, float rps) {
   uint8_t i = motorId - 1;
   if (!(rps > 0.0f)) { if (!_m[i]) { _homingVel[i] = NAN; return; } rps = _defHomingVel; }
   _homingVel[i] = rps;
-  if (_m[i] && _cache[i].online) {
-    _m[i]->setHomingVelocity(rps);
-    _m[i]->setHomingZeroVelocity(rps);
-  }
+  if (_m[i] && _cache[i].online) applyHomingParams(i);
+}
+
+// Slow zero-find speed (0x609B). 0 / NAN = same as HV (the default).
+void JMCController::setMotorHomingZeroVelocity(uint8_t motorId, float rps) {
+  if (motorId < 1 || motorId > JMC_MAX_MOTORS) return;
+  uint8_t i = motorId - 1;
+  _homingZeroVel[i] = (rps > 0.0f) ? rps : NAN;
+  if (_m[i] && _cache[i].online) applyHomingParams(i);
+}
+
+// Homing ramp (0x609A). 0 / NAN = same as the motor's acceleration (default).
+void JMCController::setMotorHomingAccel(uint8_t motorId, float rps_s) {
+  if (motorId < 1 || motorId > JMC_MAX_MOTORS) return;
+  uint8_t i = motorId - 1;
+  _homingAccel[i] = (rps_s > 0.0f) ? rps_s : NAN;
+  if (_m[i] && _cache[i].online) applyHomingParams(i);
 }
 
 void JMCController::setMotorHomingOffset(uint8_t motorId, long steps) {
@@ -705,6 +721,115 @@ void JMCController::setMotorAccelDecel(uint8_t motorId, float accel_rps_s, float
   if (_m[i] && _cache[i].online) _m[i]->setAccelDecel(accel_rps_s, decel_rps_s);
 }
 
+// Write motor i's homing parameters to its drive: search speed (HV), zero-find
+// speed (HVZ, follows HV when unset), homing ramp (HACC, follows accel when
+// unset) and the offset (HO). Called at init, re-init and before every H<n>.
+void JMCController::applyHomingParams(uint8_t i) {
+  if (!_m[i]) return;
+  float hv   = isnan(_homingVel[i])     ? _defHomingVel : _homingVel[i];
+  float hvz  = isnan(_homingZeroVel[i]) ? hv            : _homingZeroVel[i];
+  float hacc = isnan(_homingAccel[i])   ? (isnan(_accelSet[i]) ? _defAccel : _accelSet[i])
+                                        : _homingAccel[i];
+  _m[i]->setHomingVelocity(hv);
+  _m[i]->setHomingZeroVelocity(hvz);
+  _m[i]->setHomingAccel(hacc);
+  _m[i]->setHomingOffset(_homingOffset[i]);
+}
+
+//==============================================================================
+//  JMCController - saved settings (EEPROM)
+//==============================================================================
+// Layout at EEPROM address 0:
+//   SavedHeader { magic 'JMC5', layout version, motor count }
+//   SavedMotor x count { vel, acc, dec, hv, hvz, hacc, hoff }   (NAN = "not set")
+//   uint16 CRC-16 (Modbus polynomial) over header + motors
+// 32 motors need 6 + 32*28 + 2 = 904 bytes; the ATmega2560 has 4096.
+
+namespace {
+  struct SavedHeader { uint32_t magic; uint8_t version; uint8_t count; };
+  struct SavedMotor  { float vel, acc, dec, hv, hvz, hacc; long hoff; };
+  const uint32_t SAVE_MAGIC   = 0x4A4D4335UL;   // 'JMC5'
+  const uint8_t  SAVE_VERSION = 1;
+  const int      SAVE_BASE    = 0;
+
+  uint16_t crcStep(uint16_t crc, uint8_t b) {   // Modbus CRC-16, one byte
+    crc ^= b;
+    for (uint8_t k = 0; k < 8; k++)
+      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : crc >> 1;
+    return crc;
+  }
+  template <typename T> uint16_t crcPut(int& addr, const T& v, uint16_t crc) {
+    const uint8_t* p = (const uint8_t*)&v;
+    for (size_t k = 0; k < sizeof(T); k++) { EEPROM.update(addr++, p[k]); crc = crcStep(crc, p[k]); }
+    return crc;
+  }
+  template <typename T> uint16_t crcGet(int& addr, T& v, uint16_t crc) {
+    uint8_t* p = (uint8_t*)&v;
+    for (size_t k = 0; k < sizeof(T); k++) { p[k] = EEPROM.read(addr++); crc = crcStep(crc, p[k]); }
+    return crc;
+  }
+}
+
+bool JMCController::saveSettings() {
+  int needed = (int)sizeof(SavedHeader) + _count * (int)sizeof(SavedMotor) + 2;
+  if ((int)EEPROM.length() < SAVE_BASE + needed) return false;
+  int addr = SAVE_BASE;
+  uint16_t crc = 0xFFFF;
+  SavedHeader h = { SAVE_MAGIC, SAVE_VERSION, _count };
+  crc = crcPut(addr, h, crc);
+  for (uint8_t i = 0; i < _count; i++) {
+    SavedMotor m = { _storedVel[i], _accelSet[i], _decelSet[i], _homingVel[i],
+                     _homingZeroVel[i], _homingAccel[i], _homingOffset[i] };
+    crc = crcPut(addr, m, crc);
+  }
+  uint16_t stored = crc;
+  crcPut(addr, stored, 0);
+  return true;
+}
+
+bool JMCController::hasSaved() {
+  SavedHeader h; int addr = SAVE_BASE;
+  crcGet(addr, h, 0xFFFF);
+  return h.magic == SAVE_MAGIC && h.version == SAVE_VERSION &&
+         h.count >= 1 && h.count <= JMC_MAX_MOTORS;
+}
+
+bool JMCController::loadSettings() {
+  SavedHeader h; int addr = SAVE_BASE;
+  uint16_t crc = crcGet(addr, h, 0xFFFF);
+  if (h.magic != SAVE_MAGIC || h.version != SAVE_VERSION ||
+      h.count < 1 || h.count > JMC_MAX_MOTORS) return false;
+  SavedMotor m[JMC_MAX_MOTORS];
+  for (uint8_t i = 0; i < h.count; i++) crc = crcGet(addr, m[i], crc);
+  uint16_t stored; crcGet(addr, stored, 0);
+  if (stored != crc) return false;
+
+  _count = h.count;
+  if (_monIdx >= _count) _monIdx = -1;
+  for (uint8_t i = 0; i < h.count; i++) {
+    _storedVel[i]     = m[i].vel;
+    _accelSet[i]      = m[i].acc;
+    _decelSet[i]      = m[i].dec;
+    _homingVel[i]     = m[i].hv;
+    _homingZeroVel[i] = m[i].hvz;
+    _homingAccel[i]   = m[i].hacc;
+    _homingOffset[i]  = m[i].hoff;
+    if (_m[i] && _cache[i].online) {           // running: push to the drives now
+      if (isnan(_storedVel[i])) _storedVel[i] = _defVel;
+      if (isnan(_homingVel[i])) _homingVel[i] = _defHomingVel;
+      if (isnan(_accelSet[i]))  _accelSet[i]  = _defAccel;
+      if (isnan(_decelSet[i]))  _decelSet[i]  = _defDecel;
+      _m[i]->setAccelDecel(_accelSet[i], _decelSet[i]);
+      applyHomingParams(i);
+    }
+  }
+  return true;
+}
+
+void JMCController::clearSaved() {
+  for (size_t k = 0; k < sizeof(SavedHeader); k++) EEPROM.update(SAVE_BASE + k, 0xFF);
+}
+
 uint8_t JMCController::begin(uint32_t baud) {
   _bus.beginControllino(baud);
   // Short per-attempt timeouts so a dead drive can't stall the loop long.
@@ -713,6 +838,9 @@ uint8_t JMCController::begin(uint32_t baud) {
 
   Ethernet.begin(_mac, _localIp);
   _udp.begin(_localPort);
+
+  // A SAVEd block overrides the sketch values (SAVE:CLEAR to go back).
+  if (loadSettings() && Serial) Serial.println(F("JMC settings loaded from EEPROM"));
 
   uint8_t found = 0;
   for (uint8_t i = 0; i < _count; i++) {
@@ -750,9 +878,7 @@ bool JMCController::initMotorSlot(uint8_t i) {
   JMCResult r = JMC_ERR_TIMEOUT;
   if (present) {
     r = _m[i]->begin(_accelSet[i], _decelSet[i]);  // per-motor ramps
-    _m[i]->setHomingVelocity(_homingVel[i]);       // hardcoded or default
-    _m[i]->setHomingZeroVelocity(_homingVel[i]);
-    _m[i]->setHomingOffset(_homingOffset[i]);
+    applyHomingParams(i);                          // HV / HVZ / HACC / HO
   }
   _cache[i].online  = (r == JMC_OK);
   _cache[i].failCnt = 0;
@@ -783,15 +909,6 @@ void JMCController::noteMode(const bool* sel, uint8_t mode) {
     if (sel[i]) noteModeOne(i, mode);
 }
 
-// "v,v,v,..." with one field per configured motor - lets the all-motors
-// forms (ZOA / HOA / HVA) reuse the positional handlers unchanged.
-String JMCController::sameValueForAll(const String& value) {
-  String v = value; v.trim();
-  String out = "";
-  for (uint8_t i = 0; i < _count; i++) { if (i) out += F(","); out += v; }
-  return out;
-}
-
 void JMCController::run() {
   handleUdp();          // always first: commands take priority
   servicePendingMove(); // launch a move once the jog it interrupted has braked
@@ -820,44 +937,157 @@ void JMCController::reply(const String& msg) {
     sendTo(_senderIp, _senderPort, msg);
 }
 
+// Multi-packet replies: every packet but the last ends with ":MORE", the last
+// with ":END", so the PC knows when a list is complete. A single-packet reply
+// carries no marker.
+void JMCController::replyMulti(const String& packet, bool last) {
+  reply(packet + (last ? F(":END") : F(":MORE")));
+}
+
 // Send 'out' now if it has grown past REPLY_CHUNK_CHARS and restart it with
 // the header, so per-motor lists stay bounded whatever the motor count.
-bool JMCController::flushIfLong(String& out, const __FlashStringHelper* header) {
+bool JMCController::flushIfLong(String& out, const String& header) {
   if (out.length() < REPLY_CHUNK_CHARS) return false;
-  reply(out);
+  reply(out + F(":MORE"));
+  _chunked = true;
   out = header;
   return true;
 }
 
-// Parse positional CSV ("1000,,2000"): value+active per motor slot.
-int JMCController::parseFields(const String& csv, long* value, bool* active) {
-  int count = 0;
-  String work = csv + F(",");
-  int start = 0;
-  for (uint8_t i = 0; i < _count; i++) {
-    active[i] = false; value[i] = 0;
-    int comma = work.indexOf(',', start);
-    if (comma < 0) continue;
-    String part = work.substring(start, comma); part.trim();
-    if (part.length() > 0) { value[i] = atol(part.c_str()); active[i] = true; count++; }
-    start = comma + 1;
-  }
-  return count;
+String JMCController::replyChunkEnd(const String& out) {
+  if (!_chunked) return out;
+  _chunked = false;
+  return out + F(":END");
 }
 
-// Positional motor selection shared by B, H, L, Z, R - the same convention as P:
-// field N = motor N, a non-empty field selects it, an empty field skips it.
-// Empty argument (or "all") = every motor. Returns the count selected (0 = none).
-// The field value itself is ignored (it is a flag, not a number), so "1,,1"
-// picks motors 1 and 3 exactly like P:1000,,3000.
-int JMCController::parseSelection(const String& csv, bool* sel) {
+// ---- argument grammar (v0.5) --------------------------------------------------
+// Individual form   CMD:<fields>
+//     positional slots: field N = motor N, an empty field skips that motor
+//     ("1000,,3000" = M1 and M3); a single value with no comma = motor 1;
+//     or motor names: "M3,M17" (selectors) / "M3=500,M17=1000" (values),
+//     "M3" or "M3=?" in a value command = read motor 3.
+// All-motors form   CMDA[:value]  (the A suffix) - one value for every motor.
+// '?' in a value field reads that motor instead of writing.
+
+// "M3" -> 2 ; anything else -> -1
+static int motorIndexOf(const String& name, uint8_t count) {
+  if (name.length() < 2 || (name[0] != 'M' && name[0] != 'm')) return -1;
+  for (unsigned k = 1; k < name.length(); k++) if (!isDigit(name[k])) return -1;
+  int n = name.substring(1).toInt();
+  return (n >= 1 && n <= count) ? n - 1 : -1;
+}
+
+static void setField(JMCController::Fields& Fv, uint8_t i, const String& v) {
+  Fv.active[i] = true; Fv.n++;
+  if (v == "?") { Fv.query[i] = true; Fv.nq++; Fv.l[i] = 0; Fv.f[i] = 0; }
+  else { Fv.query[i] = false; Fv.l[i] = atol(v.c_str()); Fv.f[i] = v.toFloat(); }
+}
+
+// Returns the number of addressed motors, 0 = nothing given, -1 = bad syntax.
+int JMCController::parseValues(const String& csv, Fields& Fv, bool all) {
+  memset(&Fv, 0, sizeof(Fv));
   String s = csv; s.trim();
-  if (s.length() == 0 || s.equalsIgnoreCase("all")) {
-    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
+  if (!s.length()) return 0;
+
+  if (all) {                                   // CMDA:value - one value for everyone
+    if (s.indexOf(',') >= 0) return -1;
+    for (uint8_t i = 0; i < _count; i++) setField(Fv, i, s);
     return _count;
   }
-  long v[JMC_MAX_MOTORS];
-  return parseFields(s, v, sel);          // positional flags -> active motors
+  if (s[0] == 'M' || s[0] == 'm') {            // M-pairs: M3=500,M17=1000 / M3=?
+    String work = s + F(",");
+    int start = 0;
+    while (start < (int)work.length()) {
+      int comma = work.indexOf(',', start);
+      String part = work.substring(start, comma); part.trim();
+      start = comma + 1;
+      if (!part.length()) continue;
+      int eq = part.indexOf('=');
+      String name = (eq < 0) ? part : part.substring(0, eq); name.trim();
+      String val  = (eq < 0) ? String(F("?")) : part.substring(eq + 1); val.trim();
+      int idx = motorIndexOf(name, _count);
+      if (idx < 0 || !val.length()) return -1;
+      if (!Fv.active[idx]) setField(Fv, (uint8_t)idx, val);
+    }
+    return Fv.n;
+  }
+  if (s.indexOf(',') < 0) { setField(Fv, 0, s); return 1; }   // single value = motor 1
+  String work = s + F(",");                     // positional slots
+  int start = 0;
+  for (uint8_t i = 0; i < _count; i++) {
+    int comma = work.indexOf(',', start);
+    if (comma < 0) break;
+    String part = work.substring(start, comma); part.trim();
+    start = comma + 1;
+    if (part.length()) setField(Fv, i, part);
+  }
+  return Fv.n;
+}
+
+// Selectors: "1,,1" (slots) or "M1,M3" (names); all = every motor.
+// Returns the count selected, 0 = nothing given, -1 = bad motor name.
+int JMCController::parseSelection(const String& csv, bool* sel, bool all) {
+  for (uint8_t i = 0; i < _count; i++) sel[i] = false;
+  if (all) { for (uint8_t i = 0; i < _count; i++) sel[i] = true; return _count; }
+  String s = csv; s.trim();
+  if (!s.length()) return 0;
+  int n = 0;
+  String work = s + F(",");
+  int start = 0;
+  if (s[0] == 'M' || s[0] == 'm') {
+    while (start < (int)work.length()) {
+      int comma = work.indexOf(',', start);
+      String part = work.substring(start, comma); part.trim();
+      start = comma + 1;
+      if (!part.length()) continue;
+      int eq = part.indexOf('=');
+      if (eq >= 0) part = part.substring(0, eq);
+      int idx = motorIndexOf(part, _count);
+      if (idx < 0) return -1;
+      if (!sel[idx]) { sel[idx] = true; n++; }
+    }
+    return n;
+  }
+  for (uint8_t i = 0; i < _count; i++) {
+    int comma = work.indexOf(',', start);
+    if (comma < 0) break;
+    String part = work.substring(start, comma); part.trim();
+    start = comma + 1;
+    if (part.length()) { sel[i] = true; n++; }
+  }
+  return n;
+}
+
+bool JMCController::selectionError(const __FlashStringHelper* cmd, int n) {
+  if (n > 0) return false;
+  String c(cmd);
+  if (n < 0) reply(String(F("ERR:")) + c + F(" motor must be M1..M") + String(_count));
+  else       reply(String(F("ERR:")) + c + F(" needs motor slots (e.g. ") + c + F(":1,,1 or ") +
+                   c + F(":M1,M3) - ") + c + F("A = all motors"));
+  return true;
+}
+
+bool JMCController::valuesError(const __FlashStringHelper* cmd, int n, bool all) {
+  if (n > 0) return false;
+  String c(cmd);
+  if (all)       reply(String(F("ERR:")) + c + F("A takes one value for all motors (e.g. ") + c + F("A:1000)"));
+  else if (n < 0) reply(String(F("ERR:")) + c + F(" motor must be M1..M") + String(_count) + F(" (e.g. ") + c + F(":M3=1000)"));
+  else            reply(String(F("ERR:")) + c + F(" needs values (e.g. ") + c + F(":1000,,3000 or ") +
+                        c + F(":M3=1000) - ") + c + F("A:<value> = all motors"));
+  return true;
+}
+
+// Heads that take motor slots and therefore have an A-suffixed all-motors form.
+bool JMCController::isMotorCommand(const String& b) {
+  if (b == "P" || b == "PR" || b == "V" || b == "VS" || b == "ACC" || b == "DEC" ||
+      b == "L" || b == "BS" || b == "Z" || b == "ZO" || b == "ZS" || b == "HV" ||
+      b == "HVZ" || b == "HACC" || b == "HO" || b == "S" || b == "SD" || b == "LS" ||
+      b == "DG" || b == "I" || b == "R" || b == "B") return true;
+  if (b.length() >= 2 && (b[0] == 'B' || b[0] == 'H')) {       // B0..B3, H1..H12
+    for (unsigned k = 1; k < b.length(); k++) if (!isDigit(b[k])) return false;
+    return true;
+  }
+  return false;
 }
 
 //==============================================================================
@@ -875,60 +1105,67 @@ void JMCController::handleUdp() {
   in.trim();
   if (!in.length()) return;
 
-  String args;
   int colon = in.indexOf(':');
   String head = (colon < 0) ? in : in.substring(0, colon);
-  args = (colon < 0) ? String() : in.substring(colon + 1);
-  head.trim();
+  String args = (colon < 0) ? String() : in.substring(colon + 1);
+  head.trim(); head.toUpperCase();            // lower-case heads are accepted
+  args.trim();
 
   // No pairing/auto-adopt: events always go to the fixed PC address set via
   // setNetwork()/setStationId(). Replies also go back to this sender.
   _senderIp   = _udp.remoteIP();
   _senderPort = _udp.remotePort();
+  _chunked    = false;
 
-  // Exact-match multi-letter commands first, then single letters.
-  // Every motor command has a per-motor form (positional slots) and an
-  // all-motors form: either an empty/'all' selector, or the 'A' suffix for
-  // the value commands (PA, PRA, VA, ADA, ZOA, HOA, HVA).
-  if      (head == "PA")  handlePositionAll(args, true);
-  else if (head == "PRA") handlePositionAll(args, false);
-  else if (head == "PR")  handlePosition(args, false);   // relative move
-  else if (head == "VA")  handleVelocityAll(args);
-  else if (head == "VS")  handleVelocityStart(args);
-  else if (head == "HVA") handleHomingVelocity(sameValueForAll(args));
-  else if (head == "HV")  handleHomingVelocity(args);
-  else if (head == "HOA") handleHomingOffset(sameValueForAll(args));
-  else if (head == "HO")  handleHomingOffset(args);
-  else if (head == "SD")  handleStatusDetail(args);
-  else if (head == "LS")  handleLimitStatus(args);
-  else if (head == "BS")  handleBrakeStatus(args);
-  else if (head == "ZS")  handleZeroStatus(args);
-  else if (head == "ZOA") handleZeroOffset(sameValueForAll(args));
-  else if (head == "ZO")  handleZeroOffset(args);
-  else if (head == "MC")  handleMotorCount(args);
-  else if (head == "ADA") handleAccelDecelAll(args);
-  else if (head == "AD")  handleAccelDecel(args);
-  else if (head == "DG")  handleDiagnose(args);
-  else if (head == "I")   handleInit(args);
-  else if (head == "P")  handlePosition(args, true);
-  else if (head == "V")  handleVelocity(args);
-  else if (head == "S")  handleStatus(args);
-  else if (head == "B")  handleBrake(F("B"), args);              // bare B = controlled stop
-  else if (head.startsWith("B") && head.length() > 1 && isDigit(head[1]))
-                         handleBrake(head, args);             // B1/B2/B3 (positional flags after ':')
-  else if (head == "L")  handleLoosen(args);
-  else if (head == "Z")  handleZero(args);
-  else if (head == "R")  handleReset(args);
-  else if (head == "X") {
+  // ---- controller-level commands (no motor slots, no A form) ----
+  if (head == "MC")   { handleMotorCount(args); return; }
+  if (head == "VER")  { reply(String(F("JMCMotors ")) + F(JMCMOTORS_VERSION)); return; }
+  if (head == "PING") { reply(F("PONG")); return; }
+  if (head == "SAVE") { handleSave(args); return; }
+  if (head == "LOAD") { handleLoad(); return; }
+  if (head == "X") {
     reply(F("System restart initiated..."));
     delay(50);
 #if defined(__AVR__)
     asm volatile("jmp 0");            // soft reboot (AVR / Controllino)
 #endif
+    return;
   }
-  else if (head.startsWith("H") && head.length() > 1 && isDigit(head[1]))
-    handleHoming(head, args);
-  else reply(F("INVALID COMMAND"));
+
+  // ---- motor commands: CMD:<slots> individual, CMDA[:value] all motors ----
+  bool all = false;
+  if (head.length() >= 2 && head.endsWith("A")) {
+    String base = head.substring(0, head.length() - 1);
+    if (isMotorCommand(base)) { head = base; all = true; }
+  }
+
+  if      (head == "P")    handlePosition(args, true,  all);
+  else if (head == "PR")   handlePosition(args, false, all);
+  else if (head == "V")    handleFloatSetting(SET_V,    args, all);
+  else if (head == "ACC")  handleFloatSetting(SET_ACC,  args, all);
+  else if (head == "DEC")  handleFloatSetting(SET_DEC,  args, all);
+  else if (head == "HV")   handleFloatSetting(SET_HV,   args, all);
+  else if (head == "HVZ")  handleFloatSetting(SET_HVZ,  args, all);
+  else if (head == "HACC") handleFloatSetting(SET_HACC, args, all);
+  else if (head == "VS")   handleVelocityStart(args, all);
+  else if (head == "L")    handleLoosen(args, all);
+  else if (head == "BS")   handleBrakeStatus(args, all);
+  else if (head == "Z")    handleZero(args, all);
+  else if (head == "ZO")   handleZeroOffset(args, all);
+  else if (head == "ZS")   handleZeroStatus(args, all);
+  else if (head == "HO")   handleHomingOffset(args, all);
+  else if (head == "S")    handleStatus(args, all);
+  else if (head == "SD")   handleStatusDetail(args, all);
+  else if (head == "LS")   handleLimitStatus(args, all);
+  else if (head == "DG")   handleDiagnose(args, all);
+  else if (head == "I")    handleInit(args, all);
+  else if (head == "R")    handleReset(args, all);
+  else if (head == "B")    handleBrake(0, args, all);
+  else if (head[0] == 'B' && isMotorCommand(head))        // B0..B3
+    handleBrake(head.substring(1).toInt(), args, all);
+  else if (head[0] == 'H' && isMotorCommand(head))        // H1..H12
+    handleHoming(head.substring(1).toInt(), args, all);
+  else reply(String(F("ERR:unknown command ")) + head);
 }
 
 //==============================================================================
@@ -981,11 +1218,9 @@ void JMCController::serviceMonitor() {
   if (!c.online) {
     c.online = true;
     // Drive (re)appeared - it may have been power-cycled, so re-initialise it
-    // fully (enable sequence, accel/decel, homing speeds, stored HO offset).
+    // fully (enable sequence, accel/decel, homing parameters, HO offset).
     _m[chosen]->begin(_accelSet[chosen], _decelSet[chosen]);
-    _m[chosen]->setHomingVelocity(_homingVel[chosen]);
-    _m[chosen]->setHomingZeroVelocity(_homingVel[chosen]);
-    _m[chosen]->setHomingOffset(_homingOffset[chosen]);
+    applyHomingParams(chosen);
     s = _m[chosen]->getStatusWord();
     c.mode = JMCMotor::MODE_POSITION;       // begin() put it in position mode
     c.homed = false;                        // counter is 0 again: not homed
@@ -1173,8 +1408,7 @@ void JMCController::servicePendingMove() {
   _pending.active = false;
   String a = _pending.args;
   _pending.args = "";
-  if (_pending.broadcast) handlePositionAll(a, _pending.absolute);
-  else                    handlePosition(a, _pending.absolute);
+  handlePosition(a, _pending.absolute, _pending.broadcast);   // PA/PRA re-run as 'all'
 }
 
 // B / VS / I / R: whatever was queued is no longer what the operator wants.
@@ -1188,47 +1422,44 @@ void JMCController::cancelPendingMove() {
 }
 
 //==============================================================================
-//  JMCController - command handlers (JMC_CONTROLLINO_V3)
+//  JMCController - command handlers (v0.5)
 //==============================================================================
 
-// ---- P : absolute positions (reply "OK") ------------------------------------
+// ---- P / PR : position moves and '?' reads ------------------------------------
 // P = absolute target, PR = relative delta (drive-side bit6 does the math;
 // adding the current position in software was the classic double-count bug).
-void JMCController::handlePosition(const String& args, bool absolute) {
-  if (!args.length()) { reply(F("ERR:P needs positions")); return; }
+//   P:1000,,3000      M1 -> 1000, M3 -> 3000 (synchronised)
+//   P:M17=1000        motor 17 only
+//   P:?  P:,,?  P:M3  reads
+//   PA:5000 / PRA:-500   every motor, broadcast; PA:? reads all
+void JMCController::handlePosition(const String& args, bool absolute, bool all) {
+  const __FlashStringHelper* cmd = absolute ? F("P") : F("PR");
+  Fields Fv;
+  int n = parseValues(args, Fv, all);
+  if (valuesError(cmd, n, all)) return;
 
-  // '?' slots -> selective position read (P:? = M1, P:,,? = M3, ...).
-  if (args.indexOf('?') >= 0) { handlePositionQuery(args); return; }
-
-  long target[JMC_MAX_MOTORS];
-  bool active[JMC_MAX_MOTORS];
-  int  n;
-
-  if (args.indexOf(',') < 0) {            // single value => motor 1
-    for (uint8_t i = 0; i < _count; i++) active[i] = false;
-    target[0] = atol(args.c_str());
-    active[0] = true;
-    n = 1;
-  } else {
-    n = parseFields(args, target, active);
+  if (Fv.nq) {                                  // reads
+    if (Fv.nq != Fv.n) { reply(String(F("ERR:")) + cmd + F(" cannot mix values and ?")); return; }
+    replyPositions(Fv.query);
+    return;
   }
-  if (n == 0) { reply(F("ERR:no positions")); return; }
 
   // Coming out of velocity mode (VS): the drives must reach standstill before
   // their 0x6060 mode register may change - switching mode on a turning shaft
   // stops it dead, with no ramp. Brake the whole selection on its decel ramp
   // and hand the move to servicePendingMove(), which launches it (all motors
   // together, still synchronised) as soon as they are at rest.
-  if (rampDownBegin(active, _pending.braking, _pending.deadline)) {
+  if (rampDownBegin(Fv.active, _pending.braking, _pending.deadline)) {
     _pending.args      = args;      // re-run verbatim once they are at rest
     _pending.absolute  = absolute;
-    _pending.broadcast = false;
+    _pending.broadcast = all;
     _pending.lastPoll  = millis();
     _pending.active    = true;
     return;                         // "OK" is sent when the move really starts
   }
 
-  launchMove(active, target, absolute, false);
+  // PA / PRA: one broadcast prepare (motor 1's speed) + broadcast launch.
+  launchMove(Fv.active, Fv.l, absolute, all);
   reply(F("OK"));
 }
 
@@ -1244,64 +1475,214 @@ void JMCController::replyPositions(const bool* sel) {
     else                                out += String(F("M")) + String(i + 1) + F("=") + String(p);
     first = false;
     if (out.length() >= REPLY_CHUNK_CHARS) {        // many motors: several packets
-      reply(anyError ? String(F("WARN: ")) + out : out);
+      reply((anyError ? String(F("WARN: ")) + out : out) + F(":MORE"));
+      _chunked = true;
       out = ""; anyError = false; first = true;
     }
   }
-  if (out.length()) reply(anyError ? String(F("WARN: ")) + out : out);
+  reply(replyChunkEnd(anyError ? String(F("WARN: ")) + out : out));
 }
 
-// P:? queries are positional - only motors whose slot contains '?' are read:
-//   P:?    -> motor 1        P:,,?  -> motor 3        P:?,?  -> motors 1 and 2
-void JMCController::handlePositionQuery(const String& args) {
-  bool sel[JMC_MAX_MOTORS];
-  for (uint8_t i = 0; i < _count; i++) sel[i] = false;
-
-  String work = args + F(",");
-  int start = 0, n = 0;
-  for (uint8_t i = 0; i < _count; i++) {
-    int comma = work.indexOf(',', start);
-    if (comma < 0) break;
-    String part = work.substring(start, comma); part.trim();
-    if (part == "?") { sel[i] = true; n++; }
-    start = comma + 1;
+// ---- V / ACC / DEC / HV / HVZ / HACC : one per-motor float each ----------------
+//   V:0.5,,0.3   V:M3=0.3   V:?   V:M3     set / read individual motors
+//   VA:1         ACCA:0.3   HVA:?          all motors (VA also broadcasts now)
+void JMCController::handleFloatSetting(FloatSetting which, const String& args, bool all) {
+  const __FlashStringHelper* cmd;
+  const __FlashStringHelper* unit;
+  float lo, hi;
+  switch (which) {
+    case SET_V:    cmd = F("V");    unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;   // sign = direction
+    case SET_ACC:  cmd = F("ACC");  unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
+    case SET_DEC:  cmd = F("DEC");  unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
+    case SET_HV:   cmd = F("HV");   unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;
+    case SET_HVZ:  cmd = F("HVZ");  unit = F(" rps");   lo = 0.01f;    hi = 1000.0f; break;
+    default:       cmd = F("HACC"); unit = F(" rps/s"); lo = 0.1f;     hi = 6553.5f; break;
   }
-  if (n == 0) { reply(F("ERR:no '?' fields in P query")); return; }
-  replyPositions(sel);
-}
+  Fields Fv;
+  int n = parseValues(args, Fv, all);
+  if (valuesError(cmd, n, all)) return;
 
-// ---- PA / PRA : broadcast move (absolute / relative) / PA:? read-all ---------
-void JMCController::handlePositionAll(const String& args, bool absolute) {
-  if (!args.length()) { reply(absolute ? String(F("ERR:PA needs position")) : String(F("ERR:PRA needs delta"))); return; }
-
-  if (args.indexOf('?') >= 0) {           // PA:? / PRA:? -> positions of ALL motors
-    bool sel[JMC_MAX_MOTORS];
-    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
-    replyPositions(sel);
+  if (Fv.nq) {                                  // reads: "V: M1=0.50,M3=0.30"
+    if (Fv.nq != Fv.n) { reply(String(F("ERR:")) + cmd + F(" cannot mix values and ?")); return; }
+    String out = String(cmd) + F(": ");
+    bool first = true;
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!Fv.query[i]) continue;
+      if (!first) out += F(",");
+      first = false;
+      float v;
+      switch (which) {
+        case SET_V:    v = _storedVel[i]; break;
+        case SET_ACC:  v = _accelSet[i];  break;
+        case SET_DEC:  v = _decelSet[i];  break;
+        case SET_HV:   v = _homingVel[i]; break;
+        case SET_HVZ:  v = isnan(_homingZeroVel[i]) ? _homingVel[i] : _homingZeroVel[i]; break;
+        default:       v = isnan(_homingAccel[i]) ? _accelSet[i] : _homingAccel[i]; break;
+      }
+      out += String(F("M")) + String(i + 1) + F("=") + String(v, 2);
+      if (flushIfLong(out, String(cmd) + F(": "))) first = true;
+    }
+    reply(replyChunkEnd(out + unit));
     return;
   }
 
-  long pos = atol(args.c_str());
-  bool all[JMC_MAX_MOTORS];
-  long target[JMC_MAX_MOTORS];
-  for (uint8_t i = 0; i < _count; i++) { all[i] = true; target[i] = pos; }
-
-  // broadcastPrepareMove writes 0x6060 raw, so the same standstill rule
-  // applies here as for P - see handlePosition().
-  if (rampDownBegin(all, _pending.braking, _pending.deadline)) {
-    _pending.args      = args;
-    _pending.absolute  = absolute;
-    _pending.broadcast = true;
-    _pending.lastPoll  = millis();
-    _pending.active    = true;
-    return;                         // "OK" is sent when the move really starts
+  // Range check every value before touching anything (V may be negative:
+  // the sign is the jog direction, the magnitude must be in range).
+  for (uint8_t i = 0; i < _count; i++) {
+    if (!Fv.active[i]) continue;
+    float v = (which == SET_V) ? fabs(Fv.f[i]) : Fv.f[i];
+    if (v < lo || v > hi) {
+      reply(String(F("ERR:")) + cmd + F(" range ") + String(lo, 2) + F("..") + String(hi, 1) + unit +
+            String(F(" (M")) + String(i + 1) + F(")"));
+      return;
+    }
   }
 
-  launchMove(all, target, absolute, true);
-  reply(F("OK"));
+  String out = (all ? String(cmd) + F("A: all motors = ") : String(F("Set ")) + cmd + F(": "));
+  bool first = true;
+  for (uint8_t i = 0; i < _count; i++) {
+    if (!Fv.active[i]) continue;
+    float v = Fv.f[i];
+    switch (which) {
+      case SET_V:    _storedVel[i] = v; break;                 // used by the next move / VS
+      case SET_ACC:  _accelSet[i] = v; _m[i]->setAccelDecel(v, _decelSet[i]); break;
+      case SET_DEC:  _decelSet[i] = v; _m[i]->setAccelDecel(_accelSet[i], v); break;
+      case SET_HV:   _homingVel[i] = v;     applyHomingParams(i); break;
+      case SET_HVZ:  _homingZeroVel[i] = v; applyHomingParams(i); break;
+      default:       _homingAccel[i] = v;   applyHomingParams(i); break;
+    }
+    if (!all) {
+      if (!first) out += F(",");
+      first = false;
+      out += String(F("M")) + String(i + 1) + F("=") + String(v, 2);
+      if (flushIfLong(out, String(F("Set ")) + cmd + F(": "))) first = true;
+    }
+  }
+  if (all) {
+    if (which == SET_V) _m[0]->broadcastSetVelocity(Fv.f[0]);   // a running jog follows at once
+    out += String(Fv.f[0], 2) + unit;
+    if (which == SET_V) out += F(" (BROADCAST)");
+    reply(out);
+  } else {
+    reply(replyChunkEnd(out + unit));
+  }
 }
 
-// ---- S : status in many formats ------------------------------------------------
+// ---- VS : velocity mode (endless jog) -------------------------------------------
+// VS:1,,1 / VS:M1,M3 -> those motors; VSA -> every motor (broadcast start).
+// Each motor jogs at its own stored V speed (sign = direction).
+void JMCController::handleVelocityStart(const String& args, bool all) {
+  bool sel[JMC_MAX_MOTORS];
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("VS"), n)) return;
+
+  cancelPendingMove();          // back to jogging: a queued move is stale
+  String list = "";
+  for (uint8_t i = 0; i < _count; i++) {
+    if (!sel[i]) continue;
+    _m[i]->prepareVelocityMode(_storedVel[i]);
+    if (list.length()) list += F(",");
+    list += String(i + 1);
+  }
+  noteMode(sel, JMCMotor::MODE_VELOCITY);
+
+  if (n == (int)_count) {
+    // Every motor: one broadcast launch so all shafts start together.
+    _m[0]->broadcastEnableMovement();
+    delayMicroseconds(300);
+    _m[0]->broadcastStartMovement();
+    reply(F("VS: velocity mode started (stop with B)"));
+  } else {
+    // Subset: per-motor launch (broadcast would also start the others).
+    for (uint8_t i = 0; i < _count; i++) if (sel[i]) _m[i]->enableMovement();
+    delayMicroseconds(200);
+    for (uint8_t i = 0; i < _count; i++) if (sel[i]) _m[i]->startMovement();
+    reply(String(F("VS: velocity mode started for M")) + list + F(" (stop with B)"));
+  }
+}
+
+// ---- S : status word in six formats ---------------------------------------------
+//   S:1,,1  S:M2         selected motors, RAW
+//   S:1,,1:COMPACT       format after a second colon (RAW COMPACT STATE BITS FLAGS DETAIL)
+//   SA  SA:FLAGS         all motors
+void JMCController::handleStatus(const String& args, bool all) {
+  String selPart = args, fmt = F("RAW");
+  if (all) { fmt = args; selPart = ""; }
+  else {
+    int c2 = args.indexOf(':');
+    if (c2 >= 0) { fmt = args.substring(c2 + 1); selPart = args.substring(0, c2); }
+  }
+  fmt.trim(); fmt.toUpperCase(); selPart.trim();
+  if (!fmt.length()) fmt = F("RAW");
+
+  bool sel[JMC_MAX_MOTORS];
+  int n = parseSelection(selPart, sel, all);
+  if (selectionError(F("S"), n)) return;
+
+  bool first = true;
+  if (fmt == "RAW") {
+    String out = F("STATUS:");
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!sel[i]) continue;
+      if (!first) out += F(",");
+      first = false;
+      uint16_t s = _m[i]->getStatusWord();
+      if (_m[i]->lastResult() != JMC_OK) out += String(F("M")) + String(i + 1) + F("=ERROR");
+      else out += String(F("M")) + String(i + 1) + F("=0x") + String(s, HEX);
+      if (flushIfLong(out, F("STATUS:"))) first = true;
+    }
+    reply(replyChunkEnd(out));
+  }
+  else if (fmt == "COMPACT") {
+    String out = "";
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!sel[i]) continue;
+      if (!first) out += F(",");
+      first = false;
+      out += compactStatus(i);
+      if (flushIfLong(out, F(""))) first = true;
+    }
+    reply(replyChunkEnd(out));
+  }
+  else if (fmt == "STATE") {
+    String out = F("STATES:");
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!sel[i]) continue;
+      if (!first) out += F(",");
+      first = false;
+      uint16_t s = _m[i]->getStatusWord();
+      out += String(F("M")) + String(i + 1) + F(":");
+      out += (_m[i]->lastResult() != JMC_OK) ? String(F("ERROR")) : driveStateName(s);
+      if (flushIfLong(out, F("STATES:"))) first = true;
+    }
+    reply(replyChunkEnd(out));
+  }
+  else if (fmt == "BITS" || fmt == "FLAGS") {
+    bool bits = (fmt == "BITS");
+    String out = "";
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!sel[i]) continue;
+      uint16_t s = _m[i]->getStatusWord();
+      if (!first) out += F("\n");
+      first = false;
+      out += String(F("M")) + String(i + 1) + F(":");
+      if (_m[i]->lastResult() != JMC_OK) out += F("ERROR");
+      else out += bits ? bitsString(s) : flagsString(s, _cache[i].mode);
+      if (flushIfLong(out, F(""))) first = true;
+    }
+    reply(replyChunkEnd(out));
+  }
+  else if (fmt == "DETAIL") {                   // one packet per motor
+    int left = n;
+    for (uint8_t i = 0; i < _count; i++) {
+      if (!sel[i]) continue;
+      left--;
+      if (n == 1) reply(detailStatus(i)); else replyMulti(detailStatus(i), left == 0);
+    }
+  }
+  else reply(F("ERR:S formats RAW|COMPACT|DETAIL|STATE|BITS|FLAGS"));
+}
+
 String JMCController::compactStatus(int i) {
   uint16_t s = _m[i]->getStatusWord();
   if (_m[i]->lastResult() != JMC_OK) return String(F("M")) + String(i + 1) + F(":ERROR");
@@ -1313,13 +1694,11 @@ String JMCController::compactStatus(int i) {
          String(F("|VEL=")) + String(_m[i]->getVelocity(), 1);
 }
 
-void JMCController::sendDetailStatus(int i) {
+String JMCController::detailStatus(int i) {
   uint16_t s = _m[i]->getStatusWord();
   String mn = String(F("M")) + String(i + 1);
-  if (_m[i]->lastResult() != JMC_OK) {
-    reply(mn + F(": NO REPLY (") + String(JMCBus::resultName(_m[i]->lastResult())) + F(")"));
-    return;
-  }
+  if (_m[i]->lastResult() != JMC_OK)
+    return mn + F(": NO REPLY (") + String(JMCBus::resultName(_m[i]->lastResult())) + F(")");
   String out = mn + F(" (ID ") + String(_m[i]->slaveId()) + F(")\n");
   out += String(F("  Status: 0x")) + String(s, HEX) + F(" (") + driveStateName(s) + F(")\n");
   out += String(F("  Mode:   ")) + String(modeName(_cache[i].mode)) + F("\n");
@@ -1331,102 +1710,18 @@ void JMCController::sendDetailStatus(int i) {
     JMCMotor::ErrorFlags e = _m[i]->getErrorFlags();
     out += String(F("\n  Error reg 0x1001 = 0x")) + String(e.raw, HEX);
   }
-  reply(out);
+  return out;
 }
 
-void JMCController::handleStatus(const String& args) {
-  // "n[,FORMAT]" - n = 0 (all) or 1.._count.
-  String a = args; a.trim();
-  String fmt = F("RAW");
-  int sel = 0;
-  int comma = a.indexOf(',');
-  if (comma >= 0) {
-    fmt = a.substring(comma + 1); fmt.trim(); fmt.toUpperCase();
-    a = a.substring(0, comma); a.trim();
-  }
-  sel = a.toInt();
-  if (sel < 0 || sel > _count) { reply(String(F("ERR:S motor 0..")) + String(_count)); return; }
-
-  int from = (sel == 0) ? 0 : sel - 1;
-  int to   = (sel == 0) ? _count - 1 : sel - 1;
-
-  // List formats are sent in several packets when the motor count is large.
-  bool first = true;
-  if (fmt == "RAW" || fmt == "") {
-    String out = F("STATUS:");
-    for (int i = from; i <= to; i++) {
-      if (!first) out += F(",");
-      first = false;
-      uint16_t s = _m[i]->getStatusWord();
-      if (_m[i]->lastResult() != JMC_OK) out += String(F("M")) + String(i + 1) + F("=ERROR");
-      else out += String(F("M")) + String(i + 1) + F("=0x") + String(s, HEX);
-      if (flushIfLong(out, F("STATUS:"))) first = true;
-    }
-    reply(out);
-  }
-  else if (fmt == "COMPACT") {
-    String out = "";
-    for (int i = from; i <= to; i++) {
-      if (!first) out += F(",");
-      first = false;
-      out += compactStatus(i);
-      if (flushIfLong(out, F(""))) first = true;
-    }
-    reply(out);
-  }
-  else if (fmt == "STATE") {
-    String out = F("STATES:");
-    for (int i = from; i <= to; i++) {
-      if (!first) out += F(",");
-      first = false;
-      uint16_t s = _m[i]->getStatusWord();
-      out += String(F("M")) + String(i + 1) + F(":");
-      out += (_m[i]->lastResult() != JMC_OK) ? String(F("ERROR")) : driveStateName(s);
-      if (flushIfLong(out, F("STATES:"))) first = true;
-    }
-    reply(out);
-  }
-  else if (fmt == "BITS") {
-    String out = "";
-    for (int i = from; i <= to; i++) {
-      uint16_t s = _m[i]->getStatusWord();
-      if (!first) out += F("\n");
-      first = false;
-      out += String(F("M")) + String(i + 1) + F(":");
-      out += (_m[i]->lastResult() != JMC_OK) ? String(F("ERROR")) : bitsString(s);
-      if (flushIfLong(out, F(""))) first = true;
-    }
-    reply(out);
-  }
-  else if (fmt == "FLAGS") {
-    String out = "";
-    for (int i = from; i <= to; i++) {
-      uint16_t s = _m[i]->getStatusWord();
-      if (!first) out += F("\n");
-      first = false;
-      out += String(F("M")) + String(i + 1) + F(":");
-      out += (_m[i]->lastResult() != JMC_OK) ? String(F("ERROR")) : flagsString(s, _cache[i].mode);
-      if (flushIfLong(out, F(""))) first = true;
-    }
-    reply(out);
-  }
-  else if (fmt == "DETAIL") {
-    for (int i = from; i <= to; i++) sendDetailStatus(i);   // one packet per motor
-  }
-  else reply(F("ERR:S formats RAW|COMPACT|DETAIL|STATE|BITS|FLAGS"));
-}
-
-// ---- SD : detailed status in plain language -------------------------------------
-void JMCController::sendHumanStatus(int i) {
+// ---- SD : detailed status in plain language (one packet per motor) ---------------
+String JMCController::humanStatus(int i) {
   uint16_t s = _m[i]->getStatusWord();
   String mn = String(F("MOTOR ")) + String(i + 1);
 
-  if (_m[i]->lastResult() != JMC_OK) {
-    reply(String(F("=== ")) + mn + F(" === NOT RESPONDING (") +
-          String(JMCBus::resultName(_m[i]->lastResult())) +
-          F(") - check power, slave ID, RS485 wiring"));
-    return;
-  }
+  if (_m[i]->lastResult() != JMC_OK)
+    return String(F("=== ")) + mn + F(" === NOT RESPONDING (") +
+           String(JMCBus::resultName(_m[i]->lastResult())) +
+           F(") - check power, slave ID, RS485 wiring");
 
   long  pos = _m[i]->getPosition();
   float vel = _m[i]->getVelocity();
@@ -1499,62 +1794,39 @@ void JMCController::sendHumanStatus(int i) {
     }
     if (!named) out += F(" unknown");
     if (e.valid) out += String(F(" (0x1001=0x")) + String(e.raw, HEX) + F(")");
-    out += String(F(" -> send R:")) + String(i + 1) + F(" to reset\n");
+    out += String(F(" -> send R:M")) + String(i + 1) + F(" to reset\n");
   } else {
     out += F("Health: OK, no faults\n");
   }
-
-  reply(out);
+  return out;
 }
 
-void JMCController::handleStatusDetail(const String& args) {
+void JMCController::handleStatusDetail(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  String a = args; a.trim();
-
-  if (!a.length()) {                        // SD -> all motors
-    for (uint8_t i = 0; i < _count; i++) sel[i] = true;
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("SD"), n)) return;
+  int left = n;
+  for (uint8_t i = 0; i < _count; i++) {
+    if (!sel[i]) continue;
+    left--;
+    if (n == 1) reply(humanStatus(i)); else replyMulti(humanStatus(i), left == 0);
   }
-  else if (a.indexOf('?') >= 0) {           // SD:? / SD:,,? -> positional slots
-    for (uint8_t i = 0; i < _count; i++) sel[i] = false;
-    String work = a + F(",");
-    int start = 0, n = 0;
-    for (uint8_t i = 0; i < _count; i++) {
-      int comma = work.indexOf(',', start);
-      if (comma < 0) break;
-      String part = work.substring(start, comma); part.trim();
-      if (part == "?") { sel[i] = true; n++; }
-      start = comma + 1;
-    }
-    if (n == 0) { reply(F("ERR:no '?' fields in SD query")); return; }
-  }
-  else {                                    // SD:3 -> motor number also accepted
-    int id = a.toInt();
-    if (id < 1 || id > _count) { reply(String(F("ERR:SD use SD, SD:? or SD:1..")) + String(_count)); return; }
-    for (uint8_t i = 0; i < _count; i++) sel[i] = false;
-    sel[id - 1] = true;
-  }
-
-  for (uint8_t i = 0; i < _count; i++)
-    if (sel[i]) sendHumanStatus(i);         // one packet per motor
 }
 
-// ---- B : brakes -----------------------------------------------------------------
-// B<type>[:flags] - stop motors. The type is attached to the letter, exactly
-// like H<method>:  B1 decel quick-stop, B2 fast, B3 immediate; bare B (or B0)
-// is the gentle controlled stop on the decel ramp. Motor selection is
-// POSITIONAL, like P: field N = motor N, a non-empty field selects it, an empty
-// field skips it; empty (or 'all') = every motor.
-//   B1:         deceleration brake, ALL motors
-//   B2:1,,1     fast brake motors 1 and 3   (slot 2 empty = skip M2)
-//   B3:,1       immediate stop, motor 2 only
-//   B / B:1,,1  controlled stop: all / motors 1 and 3
-void JMCController::handleBrake(const String& head, const String& args) {
-  int type = (head.length() > 1) ? head.substring(1).toInt() : 0;
+// ---- B / B1 / B2 / B3 : stop --------------------------------------------------------
+// The type is the digit in the head: B (= B0) controlled stop on the decel ramp,
+// B1 quick stop on the decel ramp, B2 fast brake (quick-stop ramp), B3 immediate.
+//   B2:1,,1  B2:M1,M3   selected motors        B2A   every motor
+//   B / B1 / B2 / B3 with nothing after = every motor (emergency alias: a stop
+//   is never refused for a missing selector).
+void JMCController::handleBrake(int type, const String& args, bool all) {
   if (type < 0 || type > 3) { reply(F("ERR:B type is B, B1, B2 or B3")); return; }
+  String a = args; a.trim();
+  if (!all && !a.length()) all = true;        // bare stop = all motors, always
 
   bool sel[JMC_MAX_MOTORS];
-  int  n = parseSelection(args, sel);       // positional selection, like P
-  if (n == 0) { reply(F("ERR:B no motors selected (e.g. B2:1,,1)")); return; }
+  int  n = parseSelection(a, sel, all);
+  if (selectionError(F("B"), n)) return;
 
   // Stop wins over a move that is still waiting for the jog to brake: drop it
   // before halting, or it would launch a moment later.
@@ -1571,20 +1843,20 @@ void JMCController::handleBrake(const String& head, const String& args) {
     list += String(i + 1);
   }
 
-  bool all = (n == (int)_count);
-  String tgt = all ? String(F("all motors")) : (String(F("motor ")) + list);
+  bool every = (n == (int)_count);
+  String tgt = every ? String(F("all motors")) : (String(F("motor ")) + list);
   if      (type == 1) reply(String(F("Deceleration brake applied to ")) + tgt);
   else if (type == 2) reply(String(F("Fast brake applied to ")) + tgt);
   else if (type == 3) reply(String(F("Immediate brake applied to ")) + tgt);
-  else if (all)       reply(F("All motors stopped with deceleration"));
+  else if (every)     reply(F("All motors stopped with deceleration"));
   else                reply(String(F("Motor ")) + list + F(" stopped with deceleration"));
 }
 
 // ---- L : loosen brakes -------------------------------------------------------------
-void JMCController::handleLoosen(const String& args) {
+void JMCController::handleLoosen(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);        // positional selection, like P
-  if (n == 0) { reply(F("ERR:L no motors selected (e.g. L:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("L"), n)) return;
 
   String done = "";
   for (uint8_t i = 0; i < _count; i++) {
@@ -1597,11 +1869,11 @@ void JMCController::handleLoosen(const String& args) {
                            : String(F("Motor ")) + done + F(" brake loosened"));
 }
 
-// ---- BS : brake status (BS = all, BS:1,,1 = selected) ---------------------------------
-void JMCController::handleBrakeStatus(const String& args) {
+// ---- BS : brake status --------------------------------------------------------------
+void JMCController::handleBrakeStatus(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);
-  if (n == 0) { reply(F("ERR:BS no motors selected (e.g. BS:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("BS"), n)) return;
 
   String out = F("BRAKE STATUS: ");
   int braked = 0, freed = 0, errors = 0;
@@ -1624,17 +1896,17 @@ void JMCController::handleBrakeStatus(const String& args) {
   else if (braked && !freed)  out += F("BRAKED");
   else if (freed && !braked)  out += F("FREE");
   else                        out += F("MIXED");
-  reply(out);
+  reply(replyChunkEnd(out));
 }
 
-// ---- LS : limit & sensor status (LS = all, LS:1,,1 = selected) -------------------------
+// ---- LS : limit & sensor status -------------------------------------------------------
 // One line, machine-friendly: every switch input and the homing state per
 // motor, independent of which mode the drive is in.
 //   LIMITS: M1:CW=0 CCW=0 SW=1 HOMED=1 MODE=POS,M2:CW=1 CCW=0 SW=0 HOMED=0 MODE=HOM
-void JMCController::handleLimitStatus(const String& args) {
+void JMCController::handleLimitStatus(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);
-  if (n == 0) { reply(F("ERR:LS no motors selected (e.g. LS:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("LS"), n)) return;
 
   String out = F("LIMITS: ");
   bool first = true;
@@ -1657,14 +1929,14 @@ void JMCController::handleLimitStatus(const String& args) {
            (c.mode == JMCMotor::MODE_VELOCITY) ? String(F("VEL")) : String(F("POS"));
     if (flushIfLong(out, F("LIMITS: "))) first = true;
   }
-  reply(out);
+  reply(replyChunkEnd(out));
 }
 
 // ---- Z : current position becomes 0 ---------------------------------------------------
-void JMCController::handleZero(const String& args) {
+void JMCController::handleZero(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);        // positional selection, like P
-  if (n == 0) { reply(F("ERR:Z no motors selected (e.g. Z:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("Z"), n)) return;
 
   rampDownSelected(sel);
   String done = "";
@@ -1683,46 +1955,37 @@ void JMCController::handleZero(const String& args) {
 }
 
 // ---- ZO : redefine current position (no movement) --------------------------------------
-// ZO:10000,1000  ->  motor 1's CURRENT position now reads 10000, motor 2's 1000.
-void JMCController::handleZeroOffset(const String& args) {
-  if (!args.length()) { reply(F("ERR:ZO needs values")); return; }
+// ZO:10000,,500 -> motor 1's CURRENT position now reads 10000, motor 3's 500.
+// ZOA:5000 -> every motor reads 5000 where it stands.
+void JMCController::handleZeroOffset(const String& args, bool all) {
+  Fields Fv;
+  int n = parseValues(args, Fv, all);
+  if (valuesError(F("ZO"), n, all)) return;
+  if (Fv.nq) { reply(F("ERR:ZO takes values, not ? (read positions with P:?)")); return; }
 
-  long value[JMC_MAX_MOTORS];
-  bool active[JMC_MAX_MOTORS];
-  int  n;
-
-  if (args.indexOf(',') < 0) {              // single value => motor 1
-    for (uint8_t i = 0; i < _count; i++) active[i] = false;
-    value[0] = atol(args.c_str());
-    active[0] = true;
-    n = 1;
-  } else {
-    n = parseFields(args, value, active);
-  }
-  if (n == 0) { reply(F("ERR:no values")); return; }
-
-  rampDownSelected(active);
+  rampDownSelected(Fv.active);
   String out = F("ZO: ");
   bool first = true;
   for (uint8_t i = 0; i < _count; i++) {
-    if (!active[i]) continue;
-    _m[i]->setCurrentPosition(value[i]);
+    if (!Fv.active[i]) continue;
+    _m[i]->setCurrentPosition(Fv.l[i]);
     delay(20);                              // let homing method 0 latch
     _m[i]->setOperationMode(JMCMotor::MODE_POSITION);
     noteModeOne(i, JMCMotor::MODE_POSITION);
     _cache[i].zeroSet = true;
     if (!first) out += F(",");
-    out += String(F("M")) + String(i + 1) + F("=") + String(value[i]);
+    out += String(F("M")) + String(i + 1) + F("=") + String(Fv.l[i]);
     first = false;
+    if (flushIfLong(out, F("ZO: "))) first = true;
   }
-  reply(out + F(" (current position redefined)"));
+  reply(replyChunkEnd(out + F(" (current position redefined)")));
 }
 
-// ---- ZS : zero status (ZS = all, ZS:1,,1 = selected) -------------------------------------
-void JMCController::handleZeroStatus(const String& args) {
+// ---- ZS : zero status ---------------------------------------------------------------------
+void JMCController::handleZeroStatus(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);
-  if (n == 0) { reply(F("ERR:ZS no motors selected (e.g. ZS:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("ZS"), n)) return;
 
   String out = F("ZERO STATUS: ");
   bool allSet = true, first = true;
@@ -1739,14 +2002,14 @@ void JMCController::handleZeroStatus(const String& args) {
     if (flushIfLong(out, F("ZERO STATUS: "))) first = true;
   }
   out += allSet ? String(F(" | ALL_ZERO_SET")) : String(F(" | ZERO_NOT_SET"));
-  reply(out);
+  reply(replyChunkEnd(out));
 }
 
-// ---- R : reset ------------------------------------------------------------------------------
-void JMCController::handleReset(const String& args) {
+// ---- R : alarm reset + re-initialise --------------------------------------------------------
+void JMCController::handleReset(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);        // positional selection, like P
-  if (n == 0) { reply(F("ERR:R no motors selected (e.g. R:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("R"), n)) return;
 
   cancelPendingMove();
   String done = "";
@@ -1754,6 +2017,7 @@ void JMCController::handleReset(const String& args) {
     if (!sel[i]) continue;
     _m[i]->alarmReset();
     JMCResult r = _m[i]->begin(_accelSet[i], _decelSet[i]);
+    applyHomingParams(i);
     _cache[i].online = (r == JMC_OK);
     _cache[i].fault  = false;
     noteModeOne(i, JMCMotor::MODE_POSITION);   // begin() leaves it in position mode
@@ -1765,11 +2029,11 @@ void JMCController::handleReset(const String& args) {
                            : String(F("Motor ")) + done + F(" reset complete"));
 }
 
-// ---- I : detect + initialise (I = all, I:1,,1 = selected) ----------------------------------
-void JMCController::handleInit(const String& args) {
+// ---- I : detect + initialise ---------------------------------------------------------------
+void JMCController::handleInit(const String& args, bool all) {
   bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);
-  if (n == 0) { reply(F("ERR:I no motors selected (e.g. I:1,,1)")); return; }
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("I"), n)) return;
 
   cancelPendingMove();
   String out = F("MOTOR INITIALIZATION:\n");
@@ -1777,8 +2041,9 @@ void JMCController::handleInit(const String& args) {
   for (uint8_t i = 0; i < _count; i++) {
     if (!sel[i]) continue;
     out += String(F("Motor ")) + String(i + 1) + F(" (Slave ID ") + String(_m[i]->slaveId()) + F("): ");
-    // Full init with this motor's own ramps (sketch table or runtime AD).
+    // Full init with this motor's own ramps and homing parameters.
     JMCResult r = _m[i]->begin(_accelSet[i], _decelSet[i]);
+    applyHomingParams(i);
     _cache[i].online = (r == JMC_OK);
     noteModeOne(i, JMCMotor::MODE_POSITION);
     if (r == JMC_OK) {
@@ -1795,14 +2060,13 @@ void JMCController::handleInit(const String& args) {
   }
   out += String(F("Total motors detected: ")) + String(found) + F(" of ") + String(n);
   if (found == n) out += F("\nSUCCESS: All expected motors detected and initialized!");
-  reply(out);
+  reply(replyChunkEnd(out));
 }
 
 // ---- MC : motor count (runtime) --------------------------------------------
-// Different projects run different bus sizes (e.g. 6 here, 12 elsewhere).
 //   MC:?    read the active motor count
 //   MC:12   set count to 12 (1..32); newly added slots are probed+initialised.
-// Not persistent: after reboot the sketch's setMotorCount() value applies.
+// Kept across reboot only via SAVE; otherwise the sketch's setMotorCount() applies.
 void JMCController::handleMotorCount(const String& args) {
   String a = args; a.trim();
   if (!a.length() || a.indexOf('?') >= 0) {
@@ -1825,100 +2089,50 @@ void JMCController::handleMotorCount(const String& args) {
     if (initMotorSlot(i)) online++;    // probe + init slots added just now
   }
   reply(String(F("MC: ")) + String(_count) + F(" motors, ") + String(online) +
-        F(" online (not saved - set in sketch with setMotorCount)"));
+        F(" online (SAVE to keep across reboot)"));
 }
 
-// ---- AD / ADA : acceleration / deceleration in rps/s ------------------------
-// For geared mechanisms that need slow ramps. Resolution 0.1 rps/s.
-// AD is positional like P - one slot per motor, each slot "acc" or "acc/dec":
-//   AD:?                read per-motor values
-//   AD:0.2              motor 1: accel = decel = 0.2 rps/s
-//   AD:0.3/0.1          motor 1: accel 0.3, decel 0.1
-//   AD:0.2,,0.5/0.2     motor 1 = 0.2/0.2, skip motor 2, motor 3 = 0.5/0.2
-// ADA applies one value to every motor:
-//   ADA:0.2             all motors accel = decel = 0.2
-//   ADA:0.3/0.1         all motors accel 0.3, decel 0.1   (ADA:0.3,0.1 also OK)
-// Written to the drives immediately AND remembered for every re-init.
-// Runtime values are lost on controller power failure - hardcode final values
-// with setMotionDefaults() or per motor with setMotorAccelDecel().
-static bool parseAccDec(const String& field, float& acc, float& dec) {
-  String f = field; f.trim();
-  int slash = f.indexOf('/');
-  if (slash < 0) { acc = dec = f.toFloat(); }
-  else { acc = f.substring(0, slash).toFloat(); dec = f.substring(slash + 1).toFloat(); }
-  return !(acc <= 0.0f || dec <= 0.0f || acc > 6553.5f || dec > 6553.5f);
-}
-
-void JMCController::handleAccelDecel(const String& args) {
-  String a = args; a.trim();
-
-  if (!a.length() || a.indexOf('?') >= 0) {
-    String out = F("AD: ");
-    bool first = true;
-    for (uint8_t i = 0; i < _count; i++) {
-      if (!first) out += F(",");
-      first = false;
-      out += String(F("M")) + String(i + 1) + F("=") + String(_accelSet[i], 1) + F("/") + String(_decelSet[i], 1);
-      if (flushIfLong(out, F("AD: "))) first = true;
-    }
-    reply(out + F(" rps/s (accel/decel)"));
+// ---- SAVE / LOAD : settings in EEPROM ----------------------------------------
+//   SAVE         store V, ACC, DEC, HV, HVZ, HACC, HO and MC; applied at every boot
+//   SAVE:?       is anything stored?
+//   SAVE:CLEAR   forget the stored block (the sketch values apply at next boot)
+//   LOAD         re-apply the stored block now
+void JMCController::handleSave(const String& args) {
+  String a = args; a.trim(); a.toUpperCase();
+  if (a == "?") {
+    reply(hasSaved() ? F("SAVE: settings stored (applied at boot; SAVE:CLEAR to forget)")
+                     : F("SAVE: nothing stored (sketch values in use)"));
     return;
   }
-
-  // Positional slots; a single field with no comma is motor 1 (like P / V).
-  String work = a + F(",");
-  int start = 0, n = 0;
-  String out = F("AD: ");
-  for (uint8_t i = 0; i < _count; i++) {
-    int comma = work.indexOf(',', start);
-    if (comma < 0) break;
-    String part = work.substring(start, comma); part.trim();
-    start = comma + 1;
-    if (!part.length()) continue;
-    float acc, dec;
-    if (!parseAccDec(part, acc, dec)) { reply(String(F("ERR:AD range 0.1..6553.5 rps/s (M")) + String(i + 1) + F(")")); return; }
-    _accelSet[i] = acc;
-    _decelSet[i] = dec;
-    _m[i]->setAccelDecel(acc, dec);   // also refreshes quick-stop ramp 0x6085
-    if (n) out += F(",");
-    out += String(F("M")) + String(i + 1) + F("=") + String(acc, 1) + F("/") + String(dec, 1);
-    n++;
-  }
-  if (n == 0) { reply(F("ERR:AD needs values (AD:0.2 or AD:0.3/0.1,,0.2 or ADA:0.2)")); return; }
-  reply(out + F(" rps/s (accel/decel)"));
+  if (a == "CLEAR") { clearSaved(); reply(F("SAVE: cleared - sketch values apply at next boot")); return; }
+  if (a.length())   { reply(F("ERR:SAVE use SAVE, SAVE:? or SAVE:CLEAR")); return; }
+  if (!saveSettings()) { reply(F("ERR:SAVE EEPROM too small")); return; }
+  reply(String(F("SAVE: ")) + String(_count) + F(" motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC)"));
 }
 
-void JMCController::handleAccelDecelAll(const String& args) {
-  String a = args; a.trim();
-  if (!a.length() || a.indexOf('?') >= 0) { handleAccelDecel(F("?")); return; }
-  a.replace(',', '/');                      // accept the old "acc,dec" spelling
-  float acc, dec;
-  if (!parseAccDec(a, acc, dec)) { reply(F("ERR:ADA range 0.1..6553.5 rps/s")); return; }
-  for (uint8_t i = 0; i < _count; i++) {
-    _accelSet[i] = acc;
-    _decelSet[i] = dec;
-    _m[i]->setAccelDecel(acc, dec);
-  }
-  reply(String(F("ADA: all motors accel=")) + String(acc, 1) + F(" decel=") + String(dec, 1) + F(" rps/s"));
+void JMCController::handleLoad() {
+  if (!loadSettings()) { reply(F("ERR:LOAD nothing stored (or checksum failed)")); return; }
+  reply(String(F("LOAD: ")) + String(_count) + F(" motors loaded and applied"));
 }
 
-// ---- DG : low-level register diagnosis (DG:n) --------------------------------
+// ---- DG : low-level register diagnosis ---------------------------------------
 // Reads back what the drive ACTUALLY holds (mode, targets, ramps) and tests
 // both Modbus write types, so a "replies OK but doesn't move" case can be
 // pinpointed remotely. 32-bit registers are shown as raw hi,lo words.
-// DG / DG:0 / DG:all -> one packet per motor; DG:n -> that motor only.
-void JMCController::handleDiagnose(const String& args) {
-  String a = args; a.trim();
-  if (!a.length() || a == "0" || a.equalsIgnoreCase("all")) {
-    for (uint8_t i = 0; i < _count; i++) sendDiagnose(i);
-    return;
+//   DG:,,1  DG:M3   selected motors (one packet each)     DGA   every motor
+void JMCController::handleDiagnose(const String& args, bool all) {
+  bool sel[JMC_MAX_MOTORS];
+  int n = parseSelection(args, sel, all);
+  if (selectionError(F("DG"), n)) return;
+  int left = n;
+  for (uint8_t i = 0; i < _count; i++) {
+    if (!sel[i]) continue;
+    left--;
+    if (n == 1) reply(diagnose(i)); else replyMulti(diagnose(i), left == 0);
   }
-  int id = a.toInt();
-  if (id < 1 || id > _count) { reply(String(F("ERR:DG usage DG, DG:all or DG:1..")) + String(_count)); return; }
-  sendDiagnose((uint8_t)(id - 1));
 }
 
-void JMCController::sendDiagnose(uint8_t i) {
+String JMCController::diagnose(uint8_t i) {
   int id = i + 1;
   uint8_t slave = _m[i]->slaveId();
   uint16_t w[2];
@@ -1975,194 +2189,65 @@ void JMCController::sendDiagnose(uint8_t i) {
   if (r == JMC_ERR_EXCEPTION) out += String(F("(exc")) + String(_bus.lastException()) + F(")");
 
   out += String(F(" libScale=")) + String(_speedScale, 0);
-  reply(out);
-}
-
-//==============================================================================
-//  JMCController - extension commands
-//==============================================================================
-
-void JMCController::handleVelocity(const String& args) {
-  if (!args.length()) { reply(F("ERR:V needs argument")); return; }
-  String s = args;
-
-  if (s.indexOf('?') >= 0) {
-    String out = F("V: ");
-    for (uint8_t i = 0; i < _count; i++) { if (i) out += F(","); out += String(_storedVel[i]); }
-    reply(out);
-    return;
-  }
-
-  if (s.indexOf(',') < 0) {
-    _storedVel[0] = s.toFloat();
-    reply(String(F("Set Motor 1 V: ")) + String(_storedVel[0]));
-    return;
-  }
-
-  String work = s + F(","); int start = 0; String out = F("Set V: "); bool first = true;
-  for (uint8_t i = 0; i < _count; i++) {
-    int comma = work.indexOf(',', start);
-    if (comma < 0) break;
-    String part = work.substring(start, comma); part.trim();
-    if (part.length()) {
-      _storedVel[i] = part.toFloat();
-      if (!first) out += F(",");
-      out += String(_storedVel[i]);
-      first = false;
-    }
-    start = comma + 1;
-  }
-  reply(out);
-}
-
-void JMCController::handleVelocityAll(const String& args) {
-  String s = args; s.trim();
-  if (!s.length()) { reply(F("ERR:VA needs velocity")); return; }
-  if (s.indexOf('?') >= 0) { handleVelocity(F("?")); return; }
-  float v = s.toFloat();
-  if (v < 0 || v > 1000.0f) { reply(F("ERR:VA range 0-1000 rps")); return; }
-  for (uint8_t i = 0; i < _count; i++) _storedVel[i] = v;
-  _m[0]->broadcastSetVelocity(v);
-  reply(String(F("VA: Set all motors velocity to ")) + String(v) + F(" rps (BROADCAST)"));
-}
-
-// VS / VS:all -> every motor; VS:1,,1 -> motors 1 and 3 (positional, like P).
-// Each motor jogs at its own stored V speed (sign = direction).
-void JMCController::handleVelocityStart(const String& args) {
-  bool sel[JMC_MAX_MOTORS];
-  int n = parseSelection(args, sel);
-  if (n == 0) { reply(F("ERR:VS no motors selected (e.g. VS:1,,1)")); return; }
-
-  cancelPendingMove();          // back to jogging: a queued move is stale
-  String list = "";
-  for (uint8_t i = 0; i < _count; i++) {
-    if (!sel[i]) continue;
-    _m[i]->prepareVelocityMode(_storedVel[i]);
-    if (list.length()) list += F(",");
-    list += String(i + 1);
-  }
-  noteMode(sel, JMCMotor::MODE_VELOCITY);
-
-  if (n == (int)_count) {
-    // Every motor: one broadcast launch so all shafts start together.
-    _m[0]->broadcastEnableMovement();
-    delayMicroseconds(300);
-    _m[0]->broadcastStartMovement();
-    reply(F("VS: velocity mode started (stop with B)"));
-  } else {
-    // Subset: per-motor launch (broadcast would also start the others).
-    for (uint8_t i = 0; i < _count; i++) if (sel[i]) _m[i]->enableMovement();
-    delayMicroseconds(200);
-    for (uint8_t i = 0; i < _count; i++) if (sel[i]) _m[i]->startMovement();
-    reply(String(F("VS: velocity mode started for M")) + list + F(" (stop with B)"));
-  }
-}
-
-void JMCController::handleHomingVelocity(const String& args) {
-  if (!args.length()) { reply(F("ERR:HV needs argument")); return; }
-  String s = args;
-  if (s.indexOf(',') < 0) {
-    float v = s.toFloat();
-    _homingVel[0] = v;                  // remembered for drive re-init
-    _m[0]->setHomingVelocity(v);        // 0x6099 search speed
-    _m[0]->setHomingZeroVelocity(v);    // 0x609B zero-find speed
-    reply(String(F("Set Motor 1 HV: ")) + String(v));
-    return;
-  }
-  String work = s + F(","); int start = 0; String out = F("Set HV: "); bool first = true;
-  for (uint8_t i = 0; i < _count; i++) {
-    int comma = work.indexOf(',', start);
-    if (comma < 0) break;
-    String part = work.substring(start, comma); part.trim();
-    if (part.length()) {
-      float v = part.toFloat();
-      _homingVel[i] = v;
-      _m[i]->setHomingVelocity(v);
-      _m[i]->setHomingZeroVelocity(v);
-      if (!first) out += F(",");
-      out += part;
-      first = false;
-    }
-    start = comma + 1;
-  }
-  reply(out);
+  return out;
 }
 
 // ---- HO : homing offset --------------------------------------------------------
 // Steps the motor moves AFTER the origin sensor triggers, before declaring
-// zero (drive register 0x607C). Sign sets the direction. Positional like P:
-//   HO:1000        motor 1 -> 1000 steps past the sensor
-//   HO:1000,2000   motors 1+2
-//   HO:,,500       motor 3 only
-//   HO:?           read the stored offsets
-// The offset is stored AND written to the drive, and re-applied automatically
-// every time an H<m> homing command runs.
-void JMCController::handleHomingOffset(const String& args) {
-  if (!args.length()) { reply(F("ERR:HO needs steps (HO:1000 or HO:?)")); return; }
-  String s = args;
+// zero (drive register 0x607C). Sign sets the direction.
+//   HO:1000,,-800   HO:M3=500   HO:?   HO:M3        individual
+//   HOA:500         HOA:?                            all motors
+// Stored AND written to the drive, re-applied at every homing and re-init.
+void JMCController::handleHomingOffset(const String& args, bool all) {
+  Fields Fv;
+  int n = parseValues(args, Fv, all);
+  if (valuesError(F("HO"), n, all)) return;
 
-  if (s.indexOf('?') >= 0) {                 // HO:? -> report stored offsets
-    String out = F("HO: ");
-    bool first = true;
+  String out = F("HO: ");
+  bool first = true;
+  if (Fv.nq) {                                  // reads
+    if (Fv.nq != Fv.n) { reply(F("ERR:HO cannot mix values and ?")); return; }
     for (uint8_t i = 0; i < _count; i++) {
+      if (!Fv.query[i]) continue;
       if (!first) out += F(",");
       first = false;
       out += String(F("M")) + String(i + 1) + F("=") + String(_homingOffset[i]);
       if (flushIfLong(out, F("HO: "))) first = true;
     }
-    reply(out);
+    reply(replyChunkEnd(out));
     return;
   }
-
-  long value[JMC_MAX_MOTORS];
-  bool active[JMC_MAX_MOTORS];
-  int  n;
-
-  if (s.indexOf(',') < 0) {                  // single value => motor 1
-    for (uint8_t i = 0; i < _count; i++) active[i] = false;
-    value[0] = atol(s.c_str());
-    active[0] = true;
-    n = 1;
-  } else {
-    n = parseFields(s, value, active);
-  }
-  if (n == 0) { reply(F("ERR:no offset values")); return; }
-
-  String out = F("HO: ");
-  bool first = true;
   for (uint8_t i = 0; i < _count; i++) {
-    if (!active[i]) continue;
-    _homingOffset[i] = value[i];
-    _m[i]->setHomingOffset(value[i]);
+    if (!Fv.active[i]) continue;
+    _homingOffset[i] = Fv.l[i];
+    _m[i]->setHomingOffset(Fv.l[i]);
     if (!first) out += F(",");
-    out += String(F("M")) + String(i + 1) + F("=") + String(value[i]);
     first = false;
+    out += String(F("M")) + String(i + 1) + F("=") + String(Fv.l[i]);
+    if (flushIfLong(out, F("HO: "))) first = true;
   }
-  reply(out + F(" steps after sensor (used at next homing)"));
+  reply(replyChunkEnd(out + F(" steps after sensor (used at next homing)")));
 }
 
-// H<method>[:flags] - start homing on all motors, or a selected subset.
-// Selection is POSITIONAL, like P: field N = motor N, a non-empty field selects
-// it, an empty field skips it; empty (or 'all') = every motor. So H3:1,,1 homes
-// motors 1 and 3. Each selected motor re-applies its stored HO offset, and a
-// running jog is braked to standstill first (rampDownSelected).
-void JMCController::handleHoming(const String& head, const String& args) {
-  int method = head.substring(1).toInt();
+// ---- H1..H12 : start homing ------------------------------------------------------
+//   H3:1,,1  H3:M1,M3   selected motors      H3A   every motor
+// Each selected motor gets its homing parameters re-applied (HV/HVZ/HACC/HO),
+// a running jog is braked to standstill first, and the monitor is armed to
+// push EVENT:HOMED / EVENT:HOMING_ERROR.
+void JMCController::handleHoming(int method, const String& args, bool all) {
   if (method < 1 || method > 12) { reply(F("ERR:homing method H1..H12")); return; }
 
   bool sel[JMC_MAX_MOTORS];
-  int  n = parseSelection(args, sel);             // positional selection, like P
-  if (n == 0) { reply(F("ERR:H no motors selected (e.g. H3:1,,1)")); return; }
+  int  n = parseSelection(args, sel, all);
+  if (selectionError(F("H"), n)) return;
 
   rampDownSelected(sel);                          // jog running? brake, don't slam
   String list = "";
   uint32_t now = millis();
   for (uint8_t i = 0; i < _count; i++) {
     if (!sel[i]) continue;
-    _m[i]->setHomingOffset(_homingOffset[i]);     // re-apply stored HO offset
+    applyHomingParams(i);
     _m[i]->performHoming(method);
-    // Arm the monitor: it pushes EVENT:HOMED / EVENT:HOMING_ERROR when the
-    // drive reports completion (bit12) or error (bit13) in homing mode.
     MotorCache& c = _cache[i];
     c.mode = JMCMotor::MODE_HOMING;
     c.homingArmed = true;

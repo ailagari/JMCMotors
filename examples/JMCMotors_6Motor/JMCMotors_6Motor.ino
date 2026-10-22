@@ -76,25 +76,29 @@ const uint8_t MOTOR_ROWS = sizeof(MOTOR) / sizeof(MOTOR[0]);
 
 JMCController jmc;                     // uses Serial3 (Controllino RS-485)
 
-/*  UDP COMMANDS - send one per packet to CONTROLLINO_IP:CONTROLLINO_PORT;
+/*  UDP COMMANDS (v0.5) - one per packet to CONTROLLINO_IP:CONTROLLINO_PORT;
     replies return to the sender + PC_IP:PC_PORT; events to PC_IP:PC_PORT.
-    Every motor command has a per-motor form (positional slots: field N =
-    motor N, empty = skip) and an all-motors form (empty/'all', or the 'A'
-    suffix for value commands). Full reference: extras/PROTOCOL.md.
-      P:1000,,3000   absolute move: M1->1000, skip M2, M3->3000 (synchronised)
-      PR:-1000       relative move ;  PA:5000 / PRA:-500 all motors ;  P:? / PA:? read pos
-      V:0.5,,1       speed per motor (rps) ;  VA:0.5 all
-      AD:0.2,,0.5/0.2  accel/decel per motor (rps/s) ;  ADA:0.3/0.1 all
-      VS / VS:1,,1   run continuously (endless): all / M1+M3 ;  stop with B
-      B              controlled stop, all ;  B3: immediate stop, all
-      B2:1,,1        fast-brake M1 and M3 (positional slots, like P: empty=skip)
-      L / L:,1       loosen brakes: all / motor 2 ;  BS brake status
-      Z / ZO:5000    current position -> 0 / -> 5000 (no movement) ;  ZOA:0 all
-      HV:0.3 HO:1000 H3   homing: speed, offset, home ;  H3:1,,1 = M1 and M3
-                     HVA / HOA = all motors ;  methods H1..H12 (JMC manual)
-      S / SD / LS    status: formats / human-readable / limits+origin+homing
-      R / I / X      alarm reset / re-detect motors / reboot controller
-      MC:? / MC:8    read / set active motor count at runtime
+    One rule for every motor command:
+      CMD:<slots>     individual motors - positional slots (field N = motor N,
+                      empty = skip: "1000,,3000" = M1 and M3) or motor names
+                      ("M3=500,M17=1000" / "M1,M3"); '?' reads
+      CMDA[:value]    all motors (the A suffix); e.g. PA:5000, VA:0.5, BA, LA
+    Full reference: extras/PROTOCOL.md.
+      P:1000,,3000   absolute move (synchronised) ;  PA:5000 all ;  P:? / PA:? read
+      PR:-500,,200   relative move ;  PRA:-500 all
+      V:0.5,,0.3     run speed (rps) ;  VA:0.5 all ;  V:? / VA:? read
+      ACC:0.2,,0.5   acceleration (rps/s) ;  ACCA:0.3 ;  DEC / DECA deceleration
+      VS:1,,1 / VSA  jog endlessly: M1+M3 / all ;  stop with B
+      B / B3         controlled / immediate stop, all (bare stop = all, always)
+      B2:1,,1 / B2A  fast brake M1+M3 / all ;  L:,1 / LA loosen brake ;  BS / BSA
+      Z:1,,1 / ZA    current position -> 0 ;  ZO:5000 / ZOA:5000 -> value ;  ZS / ZSA
+      HV HVZ HACC HO homing speed, zero-find speed, ramp, offset (each: per motor,
+                     A = all, ? = read) ;  H3:1,,1 / H3A start homing, methods 1..12
+      S:1,,1:COMPACT / SA:FLAGS   status word ;  SD / SDA detailed ;  LS / LSA
+                     limits+origin+homing ;  DG / DGA register dump
+      R:,,1 / RA     alarm reset ;  I:1,,1 / IA re-detect ;  MC:? / MC:8 count
+      SAVE / LOAD / SAVE:CLEAR   keep V ACC DEC HV HVZ HACC HO MC in EEPROM
+      VER / PING / X             version / link check / reboot
     EVENTS pushed to PC_IP:PC_PORT: LIMIT (CW/CCW), ORIGIN (SW), HOMED,
     HOMING_ERROR, FAULT, FAULT_CLEARED, ONLINE, OFFLINE.                        */
 
@@ -119,8 +123,12 @@ void setup() {
     }
   }
 
-  // jmc.setMotorHomingOffset(1, 1000); // optional: steps past sensor, per motor
-  // jmc.setDriveP45(0);                // only if a motor runs 10x faster than commanded
+  // jmc.setMotorHomingOffset(1, 1000);       // optional: steps past sensor, per motor
+  // jmc.setMotorHomingZeroVelocity(1, 0.05); // optional: slow final approach (HVZ)
+  // jmc.setMotorHomingAccel(1, 0.2);         // optional: homing ramp (HACC)
+  // jmc.setDriveP45(0);                      // only if a motor runs 10x faster than commanded
+  // Note: a block stored with the SAVE command overrides all of the above at
+  // boot - send SAVE:CLEAR to return to the sketch values.
 
   uint8_t found = jmc.begin();
   Serial.print(found);
