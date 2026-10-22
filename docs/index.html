@@ -7,138 +7,146 @@
 <meta name="description" content="Interactive reference for the JMCMotors Arduino library: every UDP command with its replies, a command builder, a firmware simulator, a status-word decoder, events and setup.">
 <style>
 :root{
-  --bg:#0f1115;--bg2:#161a21;--bg3:#1d222b;--line:#2a3140;--txt:#e6e9ef;--muted:#9aa4b5;
-  --acc:#4fd1c5;--acc2:#7aa2ff;--warn:#f6c343;--err:#ff6b6b;--ok:#5fd38d;
+  --bg:#ffffff;--bg2:#ffffff;--bg3:#fbf8f4;--line:#ebe7e1;--txt:#17181c;--muted:#6f6b66;
+  --acc:#ff6a00;--acc-dark:#d95800;--acc-soft:#fff1e6;--warn:#b07a00;--err:#d13b3b;--ok:#1f8f4e;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
-}
-@media (prefers-color-scheme: light){
-  :root:not([data-theme="dark"]){
-    --bg:#f7f8fa;--bg2:#ffffff;--bg3:#eef1f6;--line:#d9dee8;--txt:#141821;--muted:#5b6475;
-    --acc:#0f8f85;--acc2:#3b63d6;--warn:#b07a00;--err:#c43b3b;--ok:#1f8f4e;
-  }
-}
-:root[data-theme="light"]{
-  --bg:#f7f8fa;--bg2:#ffffff;--bg3:#eef1f6;--line:#d9dee8;--txt:#141821;--muted:#5b6475;
-  --acc:#0f8f85;--acc2:#3b63d6;--warn:#b07a00;--err:#c43b3b;--ok:#1f8f4e;
+  --radius:14px;--shadow:0 1px 2px rgba(20,20,20,.04),0 8px 24px rgba(20,20,20,.05);
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 var(--sans)}
-a{color:var(--acc2);text-decoration:none}a:hover{text-decoration:underline}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--acc-dark);text-decoration:none}a:hover{text-decoration:underline}
 code,pre,kbd,.mono{font-family:var(--mono)}
-code{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:0 .3em;font-size:.92em;white-space:nowrap}
-pre{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;font-size:.9em;line-height:1.5;margin:10px 0}
-pre code{background:none;border:0;padding:0;white-space:pre}
-h1,h2,h3,h4{line-height:1.2;margin:0 0 .4em}
-h1{font-size:2.3rem;letter-spacing:-.02em}h2{font-size:1.6rem;margin-top:0}h3{font-size:1.15rem}h4{font-size:1rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.78rem}
-p{margin:.4em 0 .9em}
-.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
-header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
-header.top .wrap{display:flex;align-items:center;gap:14px;height:56px}
-.brand{font-weight:800;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;color:var(--txt)}
-.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--acc)}
-nav.main{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
-nav.main a{color:var(--muted);padding:6px 9px;border-radius:6px;font-size:.9rem}
-nav.main a:hover{background:var(--bg3);text-decoration:none;color:var(--txt)}
-.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--bg2);color:var(--txt);border-radius:7px;padding:7px 12px;font:inherit;font-size:.9rem;cursor:pointer}
-.btn:hover{border-color:var(--acc)}
-.btn.primary{background:var(--acc);color:#07211e;border-color:var(--acc);font-weight:600}
-.btn.small{padding:4px 8px;font-size:.8rem}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:.05em .4em;font-size:.9em;white-space:nowrap;color:#2b2520}
+pre{background:#1c1a18;color:#f3eee8;border-radius:12px;padding:14px 16px;overflow:auto;font-size:.88em;line-height:1.55;margin:10px 0}
+pre code{background:none;border:0;padding:0;white-space:pre;color:inherit}
+h1,h2,h3,h4{line-height:1.15;margin:0 0 .45em;letter-spacing:-.015em}
+h1{font-size:clamp(2rem,4.5vw,3.3rem);font-weight:800}
+h2{font-size:clamp(1.5rem,2.6vw,2.1rem);font-weight:800}
+h3{font-size:1.1rem;font-weight:700}
+h4{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+p{margin:.4em 0 1em}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.eyebrow{display:inline-block;color:var(--acc-dark);font-weight:700;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px}
+/* header */
+header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:14px;height:64px}
+.brand{font-weight:800;font-size:1.1rem;display:flex;align-items:center;gap:9px;color:var(--txt);letter-spacing:-.01em}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--acc)}
+nav.main{display:flex;gap:2px;margin-left:auto}
+nav.main a{color:var(--muted);padding:8px 12px;border-radius:999px;font-size:.93rem;font-weight:500}
+nav.main a:hover{background:var(--acc-soft);text-decoration:none;color:var(--txt)}
+header.top .btn{margin-left:6px}
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;color:var(--txt);border-radius:999px;padding:9px 16px;font:inherit;font-size:.93rem;font-weight:600;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--acc);color:var(--acc-dark);text-decoration:none}
+.btn.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+.btn.primary:hover{background:var(--acc-dark);border-color:var(--acc-dark);color:#fff}
+.btn.small{padding:5px 11px;font-size:.82rem}
 .btn:disabled{opacity:.5;cursor:default}
-section{padding:48px 0;border-bottom:1px solid var(--line);scroll-margin-top:64px}
-section:last-of-type{border-bottom:0}
-.lead{color:var(--muted);font-size:1.05rem;max-width:760px}
-.hero{padding:64px 0 40px}
-.hero .grid{display:grid;grid-template-columns:1.2fr 1fr;gap:28px;align-items:center}
-.hero pre{margin:0}
-.kpis{display:flex;gap:18px;flex-wrap:wrap;margin-top:18px}
-.kpi{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:120px}
-.kpi b{display:block;font-size:1.3rem}
-.kpi span{color:var(--muted);font-size:.82rem}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px}
+/* sections */
+section{padding:72px 0}
+section+section{border-top:1px solid var(--line)}
+.lead{color:var(--muted);font-size:1.12rem;max-width:720px}
+.hero{padding:84px 0 56px;background:linear-gradient(180deg,#fff7f0 0%,#fff 70%)}
+.hero .grid{display:grid;grid-template-columns:1.1fr 1fr;gap:40px;align-items:center}
+.hero pre{margin:0;box-shadow:var(--shadow)}
+.hero .lead{font-size:1.2rem}
+.kpis{display:flex;gap:28px;flex-wrap:wrap;margin-top:26px}
+.kpi b{display:block;font-size:1.6rem;font-weight:800;letter-spacing:-.02em}
+.kpi span{color:var(--muted);font-size:.85rem}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow)}
 .card h3{margin-top:0}
+.card .ico{width:38px;height:38px;border-radius:10px;background:var(--acc-soft);color:var(--acc-dark);display:flex;align-items:center;justify-content:center;font-weight:800;margin-bottom:12px;font-family:var(--mono)}
+.card p{margin-bottom:0;color:#3d3935}
 table{border-collapse:collapse;width:100%;font-size:.92rem;margin:8px 0 14px}
-th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
-th{background:var(--bg3);font-weight:600}
+th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
 td code{white-space:nowrap}
 .tbl-wrap{overflow:auto}
-.chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:.78rem;color:var(--muted);margin:2px 4px 2px 0;background:var(--bg2)}
-.chip.on{border-color:var(--acc);color:var(--txt);background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:.82rem;color:var(--muted);margin:2px 6px 2px 0;background:#fff;font-weight:500}
+.chip.on{border-color:var(--acc);color:var(--acc-dark);background:var(--acc-soft)}
 .chip.btn-chip{cursor:pointer}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input[type=text],input[type=number],select,textarea{background:var(--bg2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font:inherit}
-input[type=text]:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--acc) 50%,transparent);border-color:var(--acc)}
-label.l{font-size:.8rem;color:var(--muted);display:block;margin-bottom:3px}
+input[type=text],input[type=number],select,textarea{background:#fff;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 11px;font:inherit}
+input[type=text]:focus,select:focus,textarea:focus,input[type=number]:focus{outline:2px solid rgba(255,106,0,.35);border-color:var(--acc)}
+label.l{font-size:.78rem;color:var(--muted);display:block;margin-bottom:4px;font-weight:600}
 .field{display:flex;flex-direction:column;gap:2px}
 /* command reference */
-.cmd-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;position:sticky;top:56px;background:var(--bg);padding:10px 0;z-index:5}
+.cmd-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;position:sticky;top:64px;background:#fff;padding:12px 0;z-index:5}
 .cmd-tools input[type=text]{flex:1;min-width:220px}
-.cmd{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:12px}
-.cmd header{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;cursor:pointer}
-.cmd header .name{font-family:var(--mono);font-weight:700;font-size:1.1rem;color:var(--acc)}
+.cmd{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 20px;margin-bottom:10px;transition:.15s}
+.cmd:hover{border-color:#d9d3cb}
+.cmd header{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;cursor:pointer}
+.cmd header .name{font-family:var(--mono);font-weight:700;font-size:1.05rem;color:var(--acc-dark)}
 .cmd header .title{font-weight:600}
 .cmd header .cat{margin-left:auto;color:var(--muted);font-size:.8rem}
-.cmd .body{margin-top:10px;display:none}
+.cmd .body{margin-top:12px;display:none}
 .cmd.open .body{display:block}
 .cmd .forms{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}
-.form{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.form .k{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.form{background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.form .k{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
 .form code{display:block;background:none;border:0;padding:0;white-space:normal;font-size:.95em;margin-top:2px}
 .ex td:first-child{white-space:nowrap}
-.copy{float:right;opacity:.7}
-.copy:hover{opacity:1}
-.note{border-left:3px solid var(--acc);padding:6px 12px;background:var(--bg3);border-radius:0 8px 8px 0;margin:8px 0}
+.ex pre{background:var(--bg3);color:var(--txt);border:1px solid var(--line)}
+.note{border-left:3px solid var(--acc);padding:8px 14px;background:var(--bg3);border-radius:0 10px 10px 0;margin:8px 0;font-size:.95rem}
 .note.warn{border-color:var(--warn)}
 .note.err{border-color:var(--err)}
 .muted{color:var(--muted)}
-.small{font-size:.85rem}
+.small{font-size:.86rem}
 /* builder */
-.builder{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.builder .out pre{min-height:44px;margin:6px 0}
-.motor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:6px}
-.motor-grid label{display:flex;gap:6px;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:.88rem}
+.builder{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.builder .out pre{min-height:48px;margin:6px 0 12px}
+.motor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:10px}
+.motor-grid label{display:flex;gap:6px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:9px;padding:6px 9px;font-size:.88rem}
 .motor-grid input[type=number]{width:84px;padding:3px 6px}
-/* console */
-.console{display:grid;grid-template-columns:1fr 300px;gap:16px}
-.term{background:#0b0d11;color:#d7e0ea;border:1px solid var(--line);border-radius:10px;padding:12px;height:360px;overflow:auto;font-family:var(--mono);font-size:.86rem;line-height:1.45}
-:root[data-theme="light"] .term, :root:not([data-theme="dark"]) .term{background:#0b0d11}
-.term .tx{color:#7aa2ff}.term .rx{color:#d7e0ea}.term .ev{color:#f6c343}.term .er{color:#ff6b6b}.term .sys{color:#8c96a8;font-style:italic}
-.term .t{color:#5b6475;margin-right:8px}
-.panel{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
 .panel h4{margin-bottom:8px}
-.mrow{display:grid;grid-template-columns:34px 1fr;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line);font-size:.82rem}
+/* console */
+.console{display:grid;grid-template-columns:1fr 300px;gap:20px}
+.term{background:#1c1a18;color:#eee7df;border-radius:12px;padding:14px;height:380px;overflow:auto;font-family:var(--mono);font-size:.86rem;line-height:1.5;box-shadow:var(--shadow)}
+.term .tx{color:#ffb380}.term .rx{color:#eee7df}.term .ev{color:#ffd166}.term .er{color:#ff8a80}.term .sys{color:#9b948c;font-style:italic}
+.term .t{color:#7a7169;margin-right:8px}
+.mrow{display:grid;grid-template-columns:34px 1fr;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:.82rem}
 .mrow:first-of-type{border-top:0}
 .mrow .st{font-family:var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mrow .sw{display:flex;gap:3px}
-.sw button{font-size:.7rem;padding:1px 5px;border-radius:4px;border:1px solid var(--line);background:var(--bg3);color:var(--muted);cursor:pointer}
-.sw button.on{background:var(--warn);color:#201800;border-color:var(--warn)}
+.mrow .sw{display:flex;gap:4px}
+.sw button{font-size:.7rem;padding:2px 6px;border-radius:6px;border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer;font-weight:600}
+.sw button:hover{border-color:var(--acc)}
+.sw button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
 .sw button.fault.on{background:var(--err);color:#fff;border-color:var(--err)}
-.cmdline{display:flex;gap:8px;margin-top:8px}
+.cmdline{display:flex;gap:8px;margin-top:10px}
 .cmdline input{flex:1;font-family:var(--mono)}
-.shortcuts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.shortcuts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 /* decoder */
-.bits{display:grid;grid-template-columns:repeat(16,1fr);gap:4px;margin:10px 0}
-.bit{border:1px solid var(--line);border-radius:6px;padding:6px 2px;text-align:center;font-size:.72rem;background:var(--bg3)}
+.bits{display:grid;grid-template-columns:repeat(16,1fr);gap:5px;margin:12px 0}
+.bit{border:1px solid var(--line);border-radius:8px;padding:7px 2px;text-align:center;font-size:.7rem;background:#fff}
 .bit b{display:block;font-size:1rem}
-.bit.on{background:color-mix(in srgb,var(--acc) 22%,transparent);border-color:var(--acc)}
+.bit.on{background:var(--acc-soft);border-color:var(--acc);color:var(--acc-dark)}
 /* steps */
-.steps{counter-reset:s;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
-.step{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 16px 12px;position:relative}
-.step:before{counter-increment:s;content:counter(s);position:absolute;top:-12px;left:14px;background:var(--acc);color:#07211e;font-weight:800;border-radius:999px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:.85rem}
+.steps{counter-reset:s;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
+.step{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:22px 20px 14px;position:relative;box-shadow:var(--shadow)}
+.step:before{counter-increment:s;content:counter(s);position:absolute;top:-14px;left:18px;background:var(--acc);color:#fff;font-weight:800;border-radius:999px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:.85rem}
 .step h3{margin-top:4px}
-svg.wire{width:100%;height:auto;max-width:900px;display:block;margin:10px auto}
-footer{padding:30px 0;color:var(--muted);font-size:.88rem}
-.toc{position:fixed;right:12px;bottom:12px;z-index:9}
+svg.wire{width:100%;height:auto;max-width:900px;display:block;margin:16px auto 0;color:#3d3935}
+/* folds */
+details.fold{border:1px solid var(--line);border-radius:var(--radius);padding:0 20px;margin:12px 0;background:#fff}
+details.fold summary{cursor:pointer;padding:16px 0;font-weight:700;font-size:1.05rem;list-style:none;display:flex;align-items:center;gap:10px}
+details.fold summary::-webkit-details-marker{display:none}
+details.fold summary:before{content:"+";color:var(--acc);font-weight:800;width:18px}
+details.fold[open] summary:before{content:"–"}
+details.fold>*:not(summary){margin-bottom:14px}
+footer{padding:40px 0 60px;color:var(--muted);font-size:.9rem;border-top:1px solid var(--line)}
 .hero .grid>*,.builder>*,.console>*{min-width:0}
-@media (max-width:900px){.hero .grid,.builder,.console{grid-template-columns:1fr}.bits{grid-template-columns:repeat(8,1fr)}}
+@media (max-width:900px){.hero .grid,.builder,.console{grid-template-columns:1fr}.bits{grid-template-columns:repeat(8,1fr)}
+  header.top .wrap{height:auto;flex-wrap:wrap;padding:10px 20px}
+  nav.main{margin-left:0;width:100%;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;order:3}
+  nav.main a{white-space:nowrap;padding:6px 9px;font-size:.88rem}
+  header.top .btn{margin-left:auto}}
 @media (max-width:640px){
-  header.top .wrap{height:auto;flex-wrap:wrap;padding:8px 16px}
-  nav.main{margin-left:0;width:100%;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
-  nav.main a{white-space:nowrap;padding:4px 7px;font-size:.85rem}
-  h1{font-size:1.7rem}h2{font-size:1.35rem}
-  .hero{padding:32px 0 24px}
+  section{padding:48px 0}.hero{padding:40px 0 32px}
   .cmd-tools{position:static}
   .term{height:280px}
 }
@@ -148,22 +156,22 @@ footer{padding:30px 0;color:var(--muted);font-size:.88rem}
 <header class="top"><div class="wrap">
   <a class="brand" href="#top"><span class="dot"></span>JMCMotors</a>
   <nav class="main">
-    <a href="#start">Start</a><a href="#grammar">Grammar</a><a href="#builder">Builder</a><a href="#commands">Commands</a>
-    <a href="#console">Simulator</a><a href="#events">Events</a><a href="#decoder">Decoder</a><a href="#settings">Settings</a><a href="#recipes">Recipes</a><a href="#migrate">0.4 → 0.5</a>
+    <a href="#features">Features</a><a href="#console">Simulator</a><a href="#builder">Builder</a><a href="#commands">Reference</a><a href="#start">Setup</a>
   </nav>
-  <button class="btn small" id="theme" title="Toggle light/dark">◐</button>
+  <a class="btn small" href="https://github.com/ailagari/JMCMotors">GitHub</a>
 </div></header>
 
 <main id="top">
 
 <section class="hero"><div class="wrap grid">
   <div>
-    <h1>Up to 32 JMC servo drives, one text command each.</h1>
-    <p class="lead">JMCMotors runs on a Controllino, talks Modbus-RTU to JMC IHSS/IHT "-RC" drives over the built-in RS-485, and gives your PC a plain UDP command set: positions, speeds, ramps, homing, stops, status and pushed events. This page is the complete, interactive reference for firmware <b>0.5.1</b>.</p>
+    <span class="eyebrow">Arduino library · Controllino + JMC servo drives</span>
+    <h1>Up to 32 servo drives. One plain-text command each.</h1>
+    <p class="lead">JMCMotors turns a Controllino into a UDP motion controller for JMC IHSS/IHT "-RC" drives: positions, speeds, ramps, homing, stops, status, and events pushed the moment a switch or fault changes. This page is the interactive reference for firmware <b>0.5.1</b>.</p>
     <div class="row">
       <a class="btn primary" href="#builder">Build a command</a>
       <a class="btn" href="#console">Try the simulator</a>
-      <a class="btn" href="https://github.com/ailagari/JMCMotors">GitHub ↗</a>
+      <a class="btn" href="#start">Set it up</a>
     </div>
     <div class="kpis">
       <div class="kpi"><b>31</b><span>commands</span></div>
@@ -188,8 +196,132 @@ footer{padding:30px 0;color:var(--muted);font-size:.88rem}
 ← EVENT:HOMED:M1 POS=0 ST=0x1437</code></pre>
   </div>
 </div></section>
-
+<section id="features"><div class="wrap">
+  <span class="eyebrow">Why teams use it</span>
+  <h2>Everything a PC application needs, nothing it has to work around.</h2>
+  <div class="cards" style="margin-top:22px">
+    <div class="card"><div class="ico">A</div><h3>One grammar</h3><p><code>CMD:&lt;slots&gt;</code> for one or some motors, <code>CMDA</code> for all. Motor names (<code>M17=1000</code>) so software never counts commas.</p></div>
+    <div class="card"><div class="ico">⚡</div><h3>Events, not polling</h3><p>Limit switches, origin switch, homing done, faults, drives going offline or online are pushed to the PC within 100 ms.</p></div>
+    <div class="card"><div class="ico">↻</div><h3>Synchronised motion</h3><p>Multi-axis moves launch on broadcast frames so every drive starts in the same instant; relative moves are computed in the drive.</p></div>
+    <div class="card"><div class="ico">⌂</div><h3>Homing, fully exposed</h3><p>All 12 JMC homing methods, search and zero-find speeds, homing ramp and offset, with a mode-aware status decode.</p></div>
+    <div class="card"><div class="ico">💾</div><h3>Settings that survive</h3><p>The sketch is the master copy; <code>SAVE</code> keeps runtime changes in EEPROM without a USB cable, and a re-flash always wins.</p></div>
+    <div class="card"><div class="ico">1–32</div><h3>Any motor count</h3><p>One variable sets the bus size; every command, detection and the monitor follow it. Long replies arrive in marked packets.</p></div>
+  </div>
+</div></section>
+<section id="console"><div class="wrap">
+  <span class="eyebrow">See it work</span>
+  <h2>Type a command. Watch the controller answer.</h2>
+  <p class="lead">A JavaScript model of the 0.5.1 firmware: the same parser, the same replies and errors, moves that take time, homing that completes, and drive inputs you can press to see the events. Nothing leaves your browser.</p>
+  <div class="console">
+    <div>
+      <div class="term" id="terminal" aria-live="polite"></div>
+      <div class="cmdline"><input type="text" id="cmd" placeholder="Type a command, e.g. IA  or  P:1000,,3000" autocomplete="off" spellcheck="false"><button class="btn primary" id="send">Send</button><button class="btn" id="clear">Clear</button></div>
+      <div class="shortcuts" id="shortcuts"></div>
+      <p class="small muted">↑/↓ recall history. The simulator assumes drive P17 = 4000 steps per revolution, 6 motors (change with <code>MC:n</code>), motor 2 absent (<code>EVENT:OFFLINE</code> behaviour), and uses a sketch value fingerprint for <code>SAVE</code> exactly like the firmware.</p>
+    </div>
+    <div class="panel">
+      <h4>Drive inputs (click to press)</h4>
+      <div id="drives"></div>
+      <p class="small muted" style="margin-top:8px">CW / CCW / SW are the limit and origin switch inputs. FLT raises a drive fault (over-current). PWR power-cycles the drive: it goes offline, then comes back at position 0.</p>
+    </div>
+  </div>
+</div></section>
+<section id="grammar"><div class="wrap">
+  <span class="eyebrow">Grammar</span>
+  <h2>One rule for every command</h2>
+  <div class="cards">
+    <div class="card"><h3><code>CMD:&lt;slots&gt;</code></h3><p>Individual motors. <b>Positional slots</b>: field N = motor N, an empty field skips that motor, a single value with no comma = motor 1. <code>P:1000,,3000</code> moves M1 and M3.</p></div>
+    <div class="card"><h3><code>CMD:M3=500,M17=1000</code></h3><p>Motor <b>names</b> instead of counting commas: <code>M3=500</code> for a value, <code>M3</code> for a selector or a read. Any order. The practical form past a dozen motors.</p></div>
+    <div class="card"><h3><code>CMDA[:value]</code></h3><p><b>All motors</b>: the <code>A</code> suffix. One value (or <code>?</code>) applies to every motor. <code>PA:5000</code>, <code>VA:0.5</code>, <code>BA</code>, <code>LA</code>, <code>HOA:?</code>.</p></div>
+    <div class="card"><h3><code>?</code> reads</h3><p>In any value slot: <code>P:?</code> (M1), <code>P:,,?</code> (M3), <code>V:M3</code>, <code>HO:?</code>, <code>VA:?</code> (all).</p></div>
+    <div class="card"><h3>Options in the head</h3><p>Stop type and homing method are the digit in the head: <code>B2:1,,1</code>, <code>H3A</code>. The status format follows a second colon: <code>S:M1:COMPACT</code>, <code>SA:FLAGS</code>.</p></div>
+    <div class="card"><h3>The one exception</h3><p>A bare head is an error (<code>ERR:L needs motor slots…</code>) — except <code>B</code>, <code>B1</code>, <code>B2</code>, <code>B3</code>, which always stop <b>every</b> motor. A stop is never refused.</p></div>
+  </div>
+  <h3 style="margin-top:22px">Units and limits</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>Quantity</th><th>Unit</th><th>Notes</th></tr>
+    <tr><td>position</td><td>encoder steps, signed 32-bit</td><td>steps per revolution = drive <code>P17</code> (4000 gives round numbers)</td></tr>
+    <tr><td>velocity</td><td>rps</td><td>0.1 rps resolution on the drive; 0.3 rps = 18 RPM; negative = reverse jog; 0.01–1000</td></tr>
+    <tr><td>acceleration / deceleration</td><td>rps/s</td><td>0.1–6553.5; ramp time = speed ÷ ramp</td></tr>
+    <tr><td>homing speeds</td><td>rps</td><td>0.01–20 (drive ceiling 1200 rpm; methods 1–4 allow 300 rpm = 5 rps)</td></tr>
+    <tr><td>homing offset</td><td>steps</td><td>sign = direction past the sensor</td></tr>
+  </table></div>
+  <p class="small muted">Heads may be upper or lower case. A non-numeric value parses as 0 — validate on the PC side. A motor name above the configured count is refused. Replies over about 300 characters arrive in several packets: each ends with <code>:MORE</code>, the last with <code>:END</code>.</p>
+</div></section>
+<section id="builder"><div class="wrap">
+  <span class="eyebrow">Build</span>
+  <h2>Command builder</h2>
+  <p class="lead">Pick a command, choose motors and values, and get the exact packet plus the reply the firmware will send. "Run" sends it to the simulator below.</p>
+  <div class="builder">
+    <div class="panel">
+      <div class="row">
+        <div class="field"><label class="l">Command</label><select id="b-cmd"></select></div>
+        <div class="field"><label class="l">Target</label><select id="b-target"><option value="slots">individual — positional slots</option><option value="names">individual — motor names</option><option value="all">all motors (A form)</option></select></div>
+        <div class="field" id="b-optwrap" style="display:none"><label class="l" id="b-optlabel">Option</label><select id="b-opt"></select></div>
+        <div class="field"><label class="l">Mode</label><select id="b-mode"><option value="set">set / act</option><option value="read">read (?)</option></select></div>
+      </div>
+      <div id="b-motors" class="motor-grid"></div>
+      <p class="small muted" id="b-hint"></p>
+    </div>
+    <div class="out panel">
+      <h4>Packet</h4><pre><code id="b-out">P:1000</code></pre>
+      <h4>Expected reply</h4><pre><code id="b-reply">OK</code></pre>
+      <div class="row"><button class="btn primary" id="b-run">Run in simulator</button><button class="btn" id="b-copy">Copy packet</button></div>
+      <p class="small muted" id="b-notes"></p>
+    </div>
+  </div>
+</div></section>
+<section id="commands"><div class="wrap">
+  <span class="eyebrow">Reference</span>
+  <h2>Every command, both forms, every reply</h2>
+  <p class="lead">Every command, both forms, what it triggers on the bus, every reply and error. Click a command to expand it; the search matches names, examples and reply text.</p>
+  <div class="cmd-tools">
+    <input type="text" id="q" placeholder="Search: e.g. homing, OK, limit, EEPROM, B2…">
+    <span class="chip btn-chip on" data-cat="all">All</span>
+    <span class="chip btn-chip" data-cat="motion">Motion</span>
+    <span class="chip btn-chip" data-cat="speed">Speed &amp; ramps</span>
+    <span class="chip btn-chip" data-cat="stop">Stopping</span>
+    <span class="chip btn-chip" data-cat="home">Zero &amp; homing</span>
+    <span class="chip btn-chip" data-cat="status">Status</span>
+    <span class="chip btn-chip" data-cat="ctrl">Controller</span>
+    <button class="btn small" id="expandAll">Expand all</button>
+  </div>
+  <div id="commandList"></div>
+</div></section>
+<section id="events"><div class="wrap">
+  <span class="eyebrow">Events</span>
+  <h2>What the controller sends on its own</h2>
+  <p class="lead">A background monitor reads one motor's status every 8 ms and pushes a datagram to <code>PC_IP:PC_PORT</code> on every change — one when a condition appears, one when it clears. Latency ≈ motor count × 13 ms.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Trigger on the drive</th><th>Event</th><th>What to do</th></tr>
+    <tr><td>CW limit input active / released (status bit 14)</td><td><code>EVENT:LIMIT:M2:CW POS=48211 ST=0x4677</code> · <code>EVENT:LIMIT:M2:CW_CLEARED</code></td><td>the drive stopped that direction; back off with <code>PR</code>, or re-home</td></tr>
+    <tr><td>CCW limit input active / released (bit 15)</td><td><code>EVENT:LIMIT:M2:CCW POS=-120 ST=0x8677</code> · <code>EVENT:LIMIT:M2:CCW_CLEARED</code></td><td>as above</td></tr>
+    <tr><td>origin switch (SW) covered / uncovered (bit 11)</td><td><code>EVENT:ORIGIN:M2:ON POS=1012 ST=0x1c37</code> · <code>EVENT:ORIGIN:M2:OFF</code></td><td>informational; methods 3/4/7/8/11/12 stop here</td></tr>
+    <tr><td>homing completed (bit 12 in homing mode)</td><td><code>EVENT:HOMED:M2 POS=0 ST=0x1437</code></td><td>position valid; safe to move</td></tr>
+    <tr><td>homing failed (bit 13 in homing mode)</td><td><code>EVENT:HOMING_ERROR:M2 ST=0x3437 (check limit/origin wiring, HV, HO)</code></td><td>check switches and P42, lower <code>HV</code>, <code>R:M2</code>, retry</td></tr>
+    <tr><td>fault bit rises / clears (bit 3)</td><td><code>EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT</code> · <code>EVENT:FAULT_CLEARED:M3</code></td><td><code>SD:M3</code> for the cause, fix it, <code>R:M3</code></td></tr>
+    <tr><td>two status reads in a row fail</td><td><code>EVENT:OFFLINE:M4</code></td><td>power, RS-485, slave ID; retried every 3 s</td></tr>
+    <tr><td>an offline drive answers again</td><td><code>EVENT:ONLINE:M4 ST=0x1437 (re-initialised)</code></td><td>re-initialised automatically; a power-cycled drive is back at position 0 — re-home or <code>ZO</code></td></tr>
+  </table></div>
+  <p class="small muted"><code>ERR=</code> is the raw 0x1001 register, decoded as <code>CURRENT VOLTAGE TEMP COMM OVERPOS PHASE GENERIC</code>. Target reached is <b>not</b> an event: poll <code>S:M1:COMPACT</code> for <code>TR</code>.</p>
+</div></section>
+<section id="decoder"><div class="wrap">
+  <span class="eyebrow">Decoder</span>
+  <h2>Status word decoder</h2>
+  <p class="lead">Paste the <code>ST=0x…</code> from any reply or event. Bits 10, 12 and 13 change meaning with the drive's mode, so pick the mode the controller last commanded.</p>
+  <div class="row">
+    <div class="field"><label class="l">Status word (hex)</label><input type="text" id="d-hex" value="0x1437" class="mono" style="width:140px"></div>
+    <div class="field"><label class="l">Mode</label><select id="d-mode"><option value="POS">position</option><option value="VEL">velocity</option><option value="HOM">homing</option></select></div>
+    <div class="field"><label class="l">Presets</label><div class="row">
+      <button class="btn small" data-st="0x1437">idle at target</button><button class="btn small" data-st="0x1637">running</button><button class="btn small" data-st="0x4437">CW limit</button><button class="btn small" data-st="0x1c37">on origin</button><button class="btn small" data-st="0x1538">fault</button>
+    </div></div>
+  </div>
+  <div class="bits" id="d-bits"></div>
+  <div class="row"><div><b>Drive state:</b> <span id="d-state" class="mono"></span></div><div><b>FLAGS:</b> <span id="d-flags" class="mono"></span></div><div><b>COMPACT:</b> <span id="d-compact" class="mono"></span></div></div>
+  <div class="tbl-wrap"><table id="d-table"></table></div>
+</div></section>
 <section id="start"><div class="wrap">
+  <span class="eyebrow">Setup</span>
   <h2>From a bare Controllino to a moving axis</h2>
   <p class="lead">Six steps. The <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/HARDWARE.md">hardware guide</a> has the full wiring, drive-parameter and commissioning detail.</p>
   <div class="steps">
@@ -217,130 +349,18 @@ footer{padding:30px 0;color:var(--muted);font-size:.88rem}
     </g>
   </svg>
 </div></section>
-
-<section id="grammar"><div class="wrap">
-  <h2>One grammar for every command</h2>
-  <div class="cards">
-    <div class="card"><h3><code>CMD:&lt;slots&gt;</code></h3><p>Individual motors. <b>Positional slots</b>: field N = motor N, an empty field skips that motor, a single value with no comma = motor 1. <code>P:1000,,3000</code> moves M1 and M3.</p></div>
-    <div class="card"><h3><code>CMD:M3=500,M17=1000</code></h3><p>Motor <b>names</b> instead of counting commas: <code>M3=500</code> for a value, <code>M3</code> for a selector or a read. Any order. The practical form past a dozen motors.</p></div>
-    <div class="card"><h3><code>CMDA[:value]</code></h3><p><b>All motors</b>: the <code>A</code> suffix. One value (or <code>?</code>) applies to every motor. <code>PA:5000</code>, <code>VA:0.5</code>, <code>BA</code>, <code>LA</code>, <code>HOA:?</code>.</p></div>
-    <div class="card"><h3><code>?</code> reads</h3><p>In any value slot: <code>P:?</code> (M1), <code>P:,,?</code> (M3), <code>V:M3</code>, <code>HO:?</code>, <code>VA:?</code> (all).</p></div>
-    <div class="card"><h3>Options in the head</h3><p>Stop type and homing method are the digit in the head: <code>B2:1,,1</code>, <code>H3A</code>. The status format follows a second colon: <code>S:M1:COMPACT</code>, <code>SA:FLAGS</code>.</p></div>
-    <div class="card"><h3>The one exception</h3><p>A bare head is an error (<code>ERR:L needs motor slots…</code>) — except <code>B</code>, <code>B1</code>, <code>B2</code>, <code>B3</code>, which always stop <b>every</b> motor. A stop is never refused.</p></div>
-  </div>
-  <h3 style="margin-top:22px">Units and limits</h3>
-  <div class="tbl-wrap"><table>
-    <tr><th>Quantity</th><th>Unit</th><th>Notes</th></tr>
-    <tr><td>position</td><td>encoder steps, signed 32-bit</td><td>steps per revolution = drive <code>P17</code> (4000 gives round numbers)</td></tr>
-    <tr><td>velocity</td><td>rps</td><td>0.1 rps resolution on the drive; 0.3 rps = 18 RPM; negative = reverse jog; 0.01–1000</td></tr>
-    <tr><td>acceleration / deceleration</td><td>rps/s</td><td>0.1–6553.5; ramp time = speed ÷ ramp</td></tr>
-    <tr><td>homing speeds</td><td>rps</td><td>0.01–20 (drive ceiling 1200 rpm; methods 1–4 allow 300 rpm = 5 rps)</td></tr>
-    <tr><td>homing offset</td><td>steps</td><td>sign = direction past the sensor</td></tr>
-  </table></div>
-  <p class="small muted">Heads may be upper or lower case. A non-numeric value parses as 0 — validate on the PC side. A motor name above the configured count is refused. Replies over about 300 characters arrive in several packets: each ends with <code>:MORE</code>, the last with <code>:END</code>.</p>
-</div></section>
-
-<section id="builder"><div class="wrap">
-  <h2>Command builder</h2>
-  <p class="lead">Pick a command, choose motors and values, and get the exact packet plus the reply the firmware will send. "Run" sends it to the simulator below.</p>
-  <div class="builder">
-    <div class="panel">
-      <div class="row">
-        <div class="field"><label class="l">Command</label><select id="b-cmd"></select></div>
-        <div class="field"><label class="l">Target</label><select id="b-target"><option value="slots">individual — positional slots</option><option value="names">individual — motor names</option><option value="all">all motors (A form)</option></select></div>
-        <div class="field" id="b-optwrap" style="display:none"><label class="l" id="b-optlabel">Option</label><select id="b-opt"></select></div>
-        <div class="field"><label class="l">Mode</label><select id="b-mode"><option value="set">set / act</option><option value="read">read (?)</option></select></div>
-      </div>
-      <div id="b-motors" class="motor-grid"></div>
-      <p class="small muted" id="b-hint"></p>
-    </div>
-    <div class="out panel">
-      <h4>Packet</h4><pre><code id="b-out">P:1000</code></pre>
-      <h4>Expected reply</h4><pre><code id="b-reply">OK</code></pre>
-      <div class="row"><button class="btn primary" id="b-run">Run in simulator</button><button class="btn" id="b-copy">Copy packet</button></div>
-      <p class="small muted" id="b-notes"></p>
-    </div>
-  </div>
-</div></section>
-
-<section id="commands"><div class="wrap">
-  <h2>Command reference</h2>
-  <p class="lead">Every command, both forms, what it triggers on the bus, every reply and error. Click a command to expand it; the search matches names, examples and reply text.</p>
-  <div class="cmd-tools">
-    <input type="text" id="q" placeholder="Search: e.g. homing, OK, limit, EEPROM, B2…">
-    <span class="chip btn-chip on" data-cat="all">All</span>
-    <span class="chip btn-chip" data-cat="motion">Motion</span>
-    <span class="chip btn-chip" data-cat="speed">Speed &amp; ramps</span>
-    <span class="chip btn-chip" data-cat="stop">Stopping</span>
-    <span class="chip btn-chip" data-cat="home">Zero &amp; homing</span>
-    <span class="chip btn-chip" data-cat="status">Status</span>
-    <span class="chip btn-chip" data-cat="ctrl">Controller</span>
-    <button class="btn small" id="expandAll">Expand all</button>
-  </div>
-  <div id="commandList"></div>
-</div></section>
-
-<section id="console"><div class="wrap">
-  <h2>Simulator</h2>
-  <p class="lead">A JavaScript model of the 0.5.1 firmware: the same parser, the same replies and errors, moves that take time, homing that completes, and drive inputs you can press to see the events. Nothing leaves your browser.</p>
-  <div class="console">
-    <div>
-      <div class="term" id="terminal" aria-live="polite"></div>
-      <div class="cmdline"><input type="text" id="cmd" placeholder="Type a command, e.g. IA  or  P:1000,,3000" autocomplete="off" spellcheck="false"><button class="btn primary" id="send">Send</button><button class="btn" id="clear">Clear</button></div>
-      <div class="shortcuts" id="shortcuts"></div>
-      <p class="small muted">↑/↓ recall history. The simulator assumes drive P17 = 4000 steps per revolution, 6 motors (change with <code>MC:n</code>), motor 2 absent (<code>EVENT:OFFLINE</code> behaviour), and uses a sketch value fingerprint for <code>SAVE</code> exactly like the firmware.</p>
-    </div>
-    <div class="panel">
-      <h4>Drive inputs (click to press)</h4>
-      <div id="drives"></div>
-      <p class="small muted" style="margin-top:8px">CW / CCW / SW are the limit and origin switch inputs. FLT raises a drive fault (over-current). PWR power-cycles the drive: it goes offline, then comes back at position 0.</p>
-    </div>
-  </div>
-</div></section>
-
-<section id="events"><div class="wrap">
-  <h2>Events: what the controller sends on its own</h2>
-  <p class="lead">A background monitor reads one motor's status every 8 ms and pushes a datagram to <code>PC_IP:PC_PORT</code> on every change — one when a condition appears, one when it clears. Latency ≈ motor count × 13 ms.</p>
-  <div class="tbl-wrap"><table>
-    <tr><th>Trigger on the drive</th><th>Event</th><th>What to do</th></tr>
-    <tr><td>CW limit input active / released (status bit 14)</td><td><code>EVENT:LIMIT:M2:CW POS=48211 ST=0x4677</code> · <code>EVENT:LIMIT:M2:CW_CLEARED</code></td><td>the drive stopped that direction; back off with <code>PR</code>, or re-home</td></tr>
-    <tr><td>CCW limit input active / released (bit 15)</td><td><code>EVENT:LIMIT:M2:CCW POS=-120 ST=0x8677</code> · <code>EVENT:LIMIT:M2:CCW_CLEARED</code></td><td>as above</td></tr>
-    <tr><td>origin switch (SW) covered / uncovered (bit 11)</td><td><code>EVENT:ORIGIN:M2:ON POS=1012 ST=0x1c37</code> · <code>EVENT:ORIGIN:M2:OFF</code></td><td>informational; methods 3/4/7/8/11/12 stop here</td></tr>
-    <tr><td>homing completed (bit 12 in homing mode)</td><td><code>EVENT:HOMED:M2 POS=0 ST=0x1437</code></td><td>position valid; safe to move</td></tr>
-    <tr><td>homing failed (bit 13 in homing mode)</td><td><code>EVENT:HOMING_ERROR:M2 ST=0x3437 (check limit/origin wiring, HV, HO)</code></td><td>check switches and P42, lower <code>HV</code>, <code>R:M2</code>, retry</td></tr>
-    <tr><td>fault bit rises / clears (bit 3)</td><td><code>EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT</code> · <code>EVENT:FAULT_CLEARED:M3</code></td><td><code>SD:M3</code> for the cause, fix it, <code>R:M3</code></td></tr>
-    <tr><td>two status reads in a row fail</td><td><code>EVENT:OFFLINE:M4</code></td><td>power, RS-485, slave ID; retried every 3 s</td></tr>
-    <tr><td>an offline drive answers again</td><td><code>EVENT:ONLINE:M4 ST=0x1437 (re-initialised)</code></td><td>re-initialised automatically; a power-cycled drive is back at position 0 — re-home or <code>ZO</code></td></tr>
-  </table></div>
-  <p class="small muted"><code>ERR=</code> is the raw 0x1001 register, decoded as <code>CURRENT VOLTAGE TEMP COMM OVERPOS PHASE GENERIC</code>. Target reached is <b>not</b> an event: poll <code>S:M1:COMPACT</code> for <code>TR</code>.</p>
-</div></section>
-
-<section id="decoder"><div class="wrap">
-  <h2>Status word decoder</h2>
-  <p class="lead">Paste the <code>ST=0x…</code> from any reply or event. Bits 10, 12 and 13 change meaning with the drive's mode, so pick the mode the controller last commanded.</p>
-  <div class="row">
-    <div class="field"><label class="l">Status word (hex)</label><input type="text" id="d-hex" value="0x1437" class="mono" style="width:140px"></div>
-    <div class="field"><label class="l">Mode</label><select id="d-mode"><option value="POS">position</option><option value="VEL">velocity</option><option value="HOM">homing</option></select></div>
-    <div class="field"><label class="l">Presets</label><div class="row">
-      <button class="btn small" data-st="0x1437">idle at target</button><button class="btn small" data-st="0x1637">running</button><button class="btn small" data-st="0x4437">CW limit</button><button class="btn small" data-st="0x1c37">on origin</button><button class="btn small" data-st="0x1538">fault</button>
-    </div></div>
-  </div>
-  <div class="bits" id="d-bits"></div>
-  <div class="row"><div><b>Drive state:</b> <span id="d-state" class="mono"></span></div><div><b>FLAGS:</b> <span id="d-flags" class="mono"></span></div><div><b>COMPACT:</b> <span id="d-compact" class="mono"></span></div></div>
-  <div class="tbl-wrap"><table id="d-table"></table></div>
-</div></section>
-
-<section id="settings"><div class="wrap">
-  <h2>How settings work</h2>
+<section id="more"><div class="wrap">
+  <span class="eyebrow">In depth</span>
+  <h2>Settings policy, recipes, migration</h2>
+  <details class="fold" open><summary>How settings work: sketch first, SAVE for deployed units</summary>
   <div class="cards">
     <div class="card"><h3>1. The admin configures the sketch</h3><p>Network, motor count, speeds, ramps and homing live in the "EDIT ME" blocks of <code>JMCMotors_6Motor</code>. Flash once. They are re-applied on every boot and whenever a drive comes back online.</p></div>
     <div class="card"><h3>2. Runtime changes, kept without a cable</h3><p><code>V</code>, <code>ACC</code>, <code>DEC</code>, <code>HV</code>, <code>HVZ</code>, <code>HACC</code>, <code>HO</code>, <code>MC</code> last until reboot — unless the operator sends <code>SAVE</code>, which stores them in EEPROM. <code>SAVE:?</code> shows what is stored, <code>SAVE:CLEAR</code> forgets it, <code>LOAD</code> re-applies it.</p></div>
     <div class="card"><h3>3. The sketch always wins after a re-flash</h3><p>The saved block carries a fingerprint of the sketch values it was made under and is ignored as soon as the admin flashes different ones. An old <code>SAVE</code> can never override a new flash.</p></div>
   </div>
-</div></section>
+</details>
 
-<section id="recipes"><div class="wrap">
-  <h2>Recipes</h2>
+  <details class="fold"><summary>Recipes: the common sequences, command by command</summary>
   <div class="tbl-wrap"><table>
     <tr><th>Goal</th><th>Send, in order</th><th>Expect</th></tr>
     <tr><td>first contact</td><td><code>VER</code>, <code>IA</code>, <code>PA:?</code>, <code>SA:COMPACT</code></td><td><code>JMCMotors 0.5.1</code>, <code>Total motors detected: 6 of 6</code>, positions, <code>…|STP|TR|…</code></td></tr>
@@ -354,10 +374,9 @@ footer{padding:30px 0;color:var(--muted);font-size:.88rem}
     <tr><td>emergency</td><td><code>B3</code>, then <code>LA</code> only if the shafts must be free, <code>RA</code> when safe</td><td><code>Immediate brake applied to all motors</code></td></tr>
     <tr><td>speed-scale check</td><td><code>V:1</code>, <code>VS:M1</code>, count 60 s, <code>B</code></td><td>exactly 60 revs; 600 ⇒ <code>setDriveP45(0)</code> in the sketch</td></tr>
   </table></div>
-</div></section>
+</details>
 
-<section id="migrate"><div class="wrap">
-  <h2>Changes from 0.4 to 0.5</h2>
+  <details class="fold"><summary>Migrating from 0.4 to 0.5</summary>
   <div class="tbl-wrap"><table>
     <tr><th>0.4</th><th>0.5</th><th>Why</th></tr>
     <tr><td>bare <code>B</code>, <code>L</code>, <code>Z</code>, <code>R</code>, <code>I</code>, <code>VS</code>, <code>BS</code>, <code>ZS</code>, <code>LS</code>, <code>SD</code>, <code>DG</code> = all motors</td><td><code>BA</code>, <code>LA</code>, <code>ZA</code>, <code>RA</code>, <code>IA</code>, <code>VSA</code>, <code>BSA</code>, <code>ZSA</code>, <code>LSA</code>, <code>SDA</code>, <code>DGA</code>; bare selector = error, except bare <code>B</code>–<code>B3</code></td><td>one rule: the A suffix is the only all-motors form</td></tr>
@@ -369,15 +388,13 @@ footer{padding:30px 0;color:var(--muted);font-size:.88rem}
     <tr><td>—</td><td><code>M3=500</code> / <code>M1,M3</code> names; <code>HVZ</code>, <code>HACC</code>; <code>SAVE</code>/<code>LOAD</code>; <code>VER</code>, <code>PING</code>; <code>:MORE</code>/<code>:END</code></td><td>software-friendly</td></tr>
     <tr><td><code>INVALID COMMAND</code></td><td><code>ERR:unknown command &lt;HEAD&gt;</code></td><td>names the head</td></tr>
   </table></div>
-</div></section>
+</details>
 
+</div></section>
 </main>
-<footer><div class="wrap">JMCMotors · MIT · LAGARI A · <a href="https://github.com/ailagari/JMCMotors">github.com/ailagari/JMCMotors</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/PROTOCOL.md">PROTOCOL.md</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/HARDWARE.md">HARDWARE.md</a> · Verified against the JMC Modbus-RTU manual V2.2.</div></footer>
+<footer><div class="wrap"><b style="color:var(--txt)">JMCMotors</b> · MIT · LAGARI A · <a href="https://github.com/ailagari/JMCMotors">GitHub</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/PROTOCOL.md">PROTOCOL.md</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/HARDWARE.md">HARDWARE.md</a> · Verified against the JMC Modbus-RTU manual V2.2 · Install from the Arduino Library Manager.</div></footer>
 
 <script>
-/* ============================================================ theme */
-(function(){const r=document.documentElement;try{const t=localStorage.getItem('jmc-theme');if(t)r.setAttribute('data-theme',t);}catch(e){}
-document.getElementById('theme').onclick=()=>{const cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');const nx=cur==='light'?'dark':'light';r.setAttribute('data-theme',nx);try{localStorage.setItem('jmc-theme',nx);}catch(e){}};})();
 
 /* ============================================================ command data */
 const COMMANDS=[
