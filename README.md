@@ -285,6 +285,12 @@ Cross-checked against the JMC Modbus-RTU manual V2.2:
 
 ## Going deeper
 
+**Interactive reference:** <https://ailagari.github.io/JMCMotors/> — every
+command with its replies, a command builder, a firmware simulator you can
+type into, a status-word decoder, events, recipes and the 0.4 → 0.5
+migration table. (Source: [docs/index.html](docs/index.html), a single
+self-contained page.)
+
 | Document | Contents |
 |---|---|
 | [extras/PROTOCOL.md](extras/PROTOCOL.md) | command grammar and the six command shapes, every command with triggers and replies, events, trigger/response matrix, status bits, error catalogue, recipes |

@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JMCMotors — command reference, builder and simulator</title>
+<meta name="description" content="Interactive reference for the JMCMotors Arduino library: every UDP command with its replies, a command builder, a firmware simulator, a status-word decoder, events and setup.">
+<style>
+:root{
+  --bg:#0f1115;--bg2:#161a21;--bg3:#1d222b;--line:#2a3140;--txt:#e6e9ef;--muted:#9aa4b5;
+  --acc:#4fd1c5;--acc2:#7aa2ff;--warn:#f6c343;--err:#ff6b6b;--ok:#5fd38d;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f7f8fa;--bg2:#ffffff;--bg3:#eef1f6;--line:#d9dee8;--txt:#141821;--muted:#5b6475;
+    --acc:#0f8f85;--acc2:#3b63d6;--warn:#b07a00;--err:#c43b3b;--ok:#1f8f4e;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f7f8fa;--bg2:#ffffff;--bg3:#eef1f6;--line:#d9dee8;--txt:#141821;--muted:#5b6475;
+  --acc:#0f8f85;--acc2:#3b63d6;--warn:#b07a00;--err:#c43b3b;--ok:#1f8f4e;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 var(--sans)}
+a{color:var(--acc2);text-decoration:none}a:hover{text-decoration:underline}
+code,pre,kbd,.mono{font-family:var(--mono)}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:0 .3em;font-size:.92em;white-space:nowrap}
+pre{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;font-size:.9em;line-height:1.5;margin:10px 0}
+pre code{background:none;border:0;padding:0;white-space:pre}
+h1,h2,h3,h4{line-height:1.2;margin:0 0 .4em}
+h1{font-size:2.3rem;letter-spacing:-.02em}h2{font-size:1.6rem;margin-top:0}h3{font-size:1.15rem}h4{font-size:1rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.78rem}
+p{margin:.4em 0 .9em}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:14px;height:56px}
+.brand{font-weight:800;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;color:var(--txt)}
+.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--acc)}
+nav.main{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+nav.main a{color:var(--muted);padding:6px 9px;border-radius:6px;font-size:.9rem}
+nav.main a:hover{background:var(--bg3);text-decoration:none;color:var(--txt)}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--bg2);color:var(--txt);border-radius:7px;padding:7px 12px;font:inherit;font-size:.9rem;cursor:pointer}
+.btn:hover{border-color:var(--acc)}
+.btn.primary{background:var(--acc);color:#07211e;border-color:var(--acc);font-weight:600}
+.btn.small{padding:4px 8px;font-size:.8rem}
+.btn:disabled{opacity:.5;cursor:default}
+section{padding:48px 0;border-bottom:1px solid var(--line);scroll-margin-top:64px}
+section:last-of-type{border-bottom:0}
+.lead{color:var(--muted);font-size:1.05rem;max-width:760px}
+.hero{padding:64px 0 40px}
+.hero .grid{display:grid;grid-template-columns:1.2fr 1fr;gap:28px;align-items:center}
+.hero pre{margin:0}
+.kpis{display:flex;gap:18px;flex-wrap:wrap;margin-top:18px}
+.kpi{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:120px}
+.kpi b{display:block;font-size:1.3rem}
+.kpi span{color:var(--muted);font-size:.82rem}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h3{margin-top:0}
+table{border-collapse:collapse;width:100%;font-size:.92rem;margin:8px 0 14px}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg3);font-weight:600}
+td code{white-space:nowrap}
+.tbl-wrap{overflow:auto}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:.78rem;color:var(--muted);margin:2px 4px 2px 0;background:var(--bg2)}
+.chip.on{border-color:var(--acc);color:var(--txt);background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.chip.btn-chip{cursor:pointer}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=number],select,textarea{background:var(--bg2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font:inherit}
+input[type=text]:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--acc) 50%,transparent);border-color:var(--acc)}
+label.l{font-size:.8rem;color:var(--muted);display:block;margin-bottom:3px}
+.field{display:flex;flex-direction:column;gap:2px}
+/* command reference */
+.cmd-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;position:sticky;top:56px;background:var(--bg);padding:10px 0;z-index:5}
+.cmd-tools input[type=text]{flex:1;min-width:220px}
+.cmd{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:12px}
+.cmd header{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;cursor:pointer}
+.cmd header .name{font-family:var(--mono);font-weight:700;font-size:1.1rem;color:var(--acc)}
+.cmd header .title{font-weight:600}
+.cmd header .cat{margin-left:auto;color:var(--muted);font-size:.8rem}
+.cmd .body{margin-top:10px;display:none}
+.cmd.open .body{display:block}
+.cmd .forms{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0}
+.form{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.form .k{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.form code{display:block;background:none;border:0;padding:0;white-space:normal;font-size:.95em;margin-top:2px}
+.ex td:first-child{white-space:nowrap}
+.copy{float:right;opacity:.7}
+.copy:hover{opacity:1}
+.note{border-left:3px solid var(--acc);padding:6px 12px;background:var(--bg3);border-radius:0 8px 8px 0;margin:8px 0}
+.note.warn{border-color:var(--warn)}
+.note.err{border-color:var(--err)}
+.muted{color:var(--muted)}
+.small{font-size:.85rem}
+/* builder */
+.builder{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.builder .out pre{min-height:44px;margin:6px 0}
+.motor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:6px}
+.motor-grid label{display:flex;gap:6px;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:.88rem}
+.motor-grid input[type=number]{width:84px;padding:3px 6px}
+/* console */
+.console{display:grid;grid-template-columns:1fr 300px;gap:16px}
+.term{background:#0b0d11;color:#d7e0ea;border:1px solid var(--line);border-radius:10px;padding:12px;height:360px;overflow:auto;font-family:var(--mono);font-size:.86rem;line-height:1.45}
+:root[data-theme="light"] .term, :root:not([data-theme="dark"]) .term{background:#0b0d11}
+.term .tx{color:#7aa2ff}.term .rx{color:#d7e0ea}.term .ev{color:#f6c343}.term .er{color:#ff6b6b}.term .sys{color:#8c96a8;font-style:italic}
+.term .t{color:#5b6475;margin-right:8px}
+.panel{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.panel h4{margin-bottom:8px}
+.mrow{display:grid;grid-template-columns:34px 1fr;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line);font-size:.82rem}
+.mrow:first-of-type{border-top:0}
+.mrow .st{font-family:var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .sw{display:flex;gap:3px}
+.sw button{font-size:.7rem;padding:1px 5px;border-radius:4px;border:1px solid var(--line);background:var(--bg3);color:var(--muted);cursor:pointer}
+.sw button.on{background:var(--warn);color:#201800;border-color:var(--warn)}
+.sw button.fault.on{background:var(--err);color:#fff;border-color:var(--err)}
+.cmdline{display:flex;gap:8px;margin-top:8px}
+.cmdline input{flex:1;font-family:var(--mono)}
+.shortcuts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+/* decoder */
+.bits{display:grid;grid-template-columns:repeat(16,1fr);gap:4px;margin:10px 0}
+.bit{border:1px solid var(--line);border-radius:6px;padding:6px 2px;text-align:center;font-size:.72rem;background:var(--bg3)}
+.bit b{display:block;font-size:1rem}
+.bit.on{background:color-mix(in srgb,var(--acc) 22%,transparent);border-color:var(--acc)}
+/* steps */
+.steps{counter-reset:s;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.step{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 16px 12px;position:relative}
+.step:before{counter-increment:s;content:counter(s);position:absolute;top:-12px;left:14px;background:var(--acc);color:#07211e;font-weight:800;border-radius:999px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:.85rem}
+.step h3{margin-top:4px}
+svg.wire{width:100%;height:auto;max-width:900px;display:block;margin:10px auto}
+footer{padding:30px 0;color:var(--muted);font-size:.88rem}
+.toc{position:fixed;right:12px;bottom:12px;z-index:9}
+.hero .grid>*,.builder>*,.console>*{min-width:0}
+@media (max-width:900px){.hero .grid,.builder,.console{grid-template-columns:1fr}.bits{grid-template-columns:repeat(8,1fr)}}
+@media (max-width:640px){
+  header.top .wrap{height:auto;flex-wrap:wrap;padding:8px 16px}
+  nav.main{margin-left:0;width:100%;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+  nav.main a{white-space:nowrap;padding:4px 7px;font-size:.85rem}
+  h1{font-size:1.7rem}h2{font-size:1.35rem}
+  .hero{padding:32px 0 24px}
+  .cmd-tools{position:static}
+  .term{height:280px}
+}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#top"><span class="dot"></span>JMCMotors</a>
+  <nav class="main">
+    <a href="#start">Start</a><a href="#grammar">Grammar</a><a href="#builder">Builder</a><a href="#commands">Commands</a>
+    <a href="#console">Simulator</a><a href="#events">Events</a><a href="#decoder">Decoder</a><a href="#settings">Settings</a><a href="#recipes">Recipes</a><a href="#migrate">0.4 → 0.5</a>
+  </nav>
+  <button class="btn small" id="theme" title="Toggle light/dark">◐</button>
+</div></header>
+
+<main id="top">
+
+<section class="hero"><div class="wrap grid">
+  <div>
+    <h1>Up to 32 JMC servo drives, one text command each.</h1>
+    <p class="lead">JMCMotors runs on a Controllino, talks Modbus-RTU to JMC IHSS/IHT "-RC" drives over the built-in RS-485, and gives your PC a plain UDP command set: positions, speeds, ramps, homing, stops, status and pushed events. This page is the complete, interactive reference for firmware <b>0.5.1</b>.</p>
+    <div class="row">
+      <a class="btn primary" href="#builder">Build a command</a>
+      <a class="btn" href="#console">Try the simulator</a>
+      <a class="btn" href="https://github.com/ailagari/JMCMotors">GitHub ↗</a>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>31</b><span>commands</span></div>
+      <div class="kpi"><b>1–32</b><span>motors, one variable</span></div>
+      <div class="kpi"><b>8</b><span>pushed event types</span></div>
+      <div class="kpi"><b>12</b><span>homing methods</span></div>
+    </div>
+  </div>
+  <div>
+<pre><code>→ VER
+← JMCMotors 0.5.1
+→ IA
+← MOTOR INITIALIZATION:
+  Motor 1 (Slave ID 1): DETECTED - Initialized in Position mode
+  …
+  Total motors detected: 6 of 6
+→ P:4000,,12000
+← OK
+→ H3:M1
+← Homing method 3 started for M1
+← EVENT:ORIGIN:M1:ON POS=-3120 ST=0x1e37
+← EVENT:HOMED:M1 POS=0 ST=0x1437</code></pre>
+  </div>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <h2>From a bare Controllino to a moving axis</h2>
+  <p class="lead">Six steps. The <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/HARDWARE.md">hardware guide</a> has the full wiring, drive-parameter and commissioning detail.</p>
+  <div class="steps">
+    <div class="step"><h3>Install</h3><p>Arduino IDE → Tools → Manage Libraries → <b>JMCMotors</b>. Also install the <b>CONTROLLINO</b> board package. Or add the repository ZIP.</p></div>
+    <div class="step"><h3>Wire RS-485</h3><p>A/B daisy-chain from the Controllino's RS-485 port through every drive, 120 Ω across A/B at the last drive, common ground. Limit and origin switches go to the <em>drive's</em> inputs.</p></div>
+    <div class="step"><h3>Set the drives</h3><p>On each drive's panel: <code>P43 = 0</code> (Modbus, the factory default is CANopen), <code>P40</code> = slave ID 1, 2, 3…, <code>P41 = 7</code> (115200), <code>P42</code> sensor polarity, <code>P17</code> steps per revolution, <code>P19 = 7</code> for geared loads. Restart the drive.</p></div>
+    <div class="step"><h3>Configure the sketch</h3><p>Open <code>JMCMotors_6Motor</code>, edit the three "EDIT ME" blocks: network addresses, <code>MOTOR_COUNT</code>, speeds/ramps/homing (global or a per-motor table). Flash.</p></div>
+    <div class="step"><h3>Connect</h3><p>Any UDP tool to <code>CONTROLLINO_IP:CONTROLLINO_PORT</code>. Replies come back to the sender and to <code>PC_IP:PC_PORT</code>; <b>events only go to <code>PC_IP:PC_PORT</code></b>. Boot sends <code>Motor ready</code>.</p></div>
+    <div class="step"><h3>Commission</h3><p><code>VER</code> → <code>IA</code> → <code>PR:4000</code> (one turn?) → <code>V:1</code> + <code>VS:M1</code> for 60 s (exactly 60 revs?) → <code>ACC</code>/<code>DEC</code> until smooth → <code>Z</code> or <code>H3</code> → press each switch, watch for <code>EVENT:LIMIT</code>.</p></div>
+  </div>
+  <svg class="wire" viewBox="0 0 900 190" role="img" aria-label="Wiring: PC to Controllino over Ethernet; Controllino RS-485 A/B daisy-chained through drives 1 to N with a 120 ohm terminator at the last drive">
+    <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5 0 10z" fill="currentColor"/></marker></defs>
+    <g font-family="system-ui,sans-serif" font-size="13" fill="currentColor" stroke="currentColor">
+      <rect x="20" y="60" width="120" height="60" rx="8" fill="none"/><text x="80" y="86" text-anchor="middle" stroke="none">PC (UDP tool)</text><text x="80" y="104" text-anchor="middle" stroke="none" font-size="11">PC_IP:PC_PORT</text>
+      <line x1="140" y1="90" x2="210" y2="90" marker-end="url(#ar)"/><text x="175" y="80" text-anchor="middle" stroke="none" font-size="11">Ethernet</text>
+      <rect x="212" y="50" width="150" height="80" rx="8" fill="none"/><text x="287" y="80" text-anchor="middle" stroke="none">Controllino MAXI</text><text x="287" y="98" text-anchor="middle" stroke="none" font-size="11">JMCMotors firmware</text><text x="287" y="116" text-anchor="middle" stroke="none" font-size="11">RS-485 (Serial3)</text>
+      <line x1="362" y1="82" x2="880" y2="82"/><line x1="362" y1="98" x2="880" y2="98"/>
+      <text x="370" y="76" stroke="none" font-size="11">A</text><text x="370" y="112" stroke="none" font-size="11">B</text>
+      <g><rect x="420" y="130" width="90" height="44" rx="6" fill="none"/><text x="465" y="150" text-anchor="middle" stroke="none" font-size="12">Drive 1</text><text x="465" y="166" text-anchor="middle" stroke="none" font-size="10">P40 = 1</text><line x1="455" y1="82" x2="455" y2="130"/><line x1="475" y1="98" x2="475" y2="130"/></g>
+      <g><rect x="560" y="130" width="90" height="44" rx="6" fill="none"/><text x="605" y="150" text-anchor="middle" stroke="none" font-size="12">Drive 2</text><text x="605" y="166" text-anchor="middle" stroke="none" font-size="10">P40 = 2</text><line x1="595" y1="82" x2="595" y2="130"/><line x1="615" y1="98" x2="615" y2="130"/></g>
+      <text x="705" y="155" text-anchor="middle" stroke="none">…</text>
+      <g><rect x="760" y="130" width="90" height="44" rx="6" fill="none"/><text x="805" y="150" text-anchor="middle" stroke="none" font-size="12">Drive N</text><text x="805" y="166" text-anchor="middle" stroke="none" font-size="10">P40 = N ≤ 32</text><line x1="795" y1="82" x2="795" y2="130"/><line x1="815" y1="98" x2="815" y2="130"/></g>
+      <rect x="872" y="84" width="16" height="12" fill="none"/><text x="880" y="72" text-anchor="middle" stroke="none" font-size="10">120 Ω</text>
+      <text x="620" y="30" text-anchor="middle" stroke="none" font-size="12">Limit / origin switches wire to each drive's inputs, not to the Controllino</text>
+    </g>
+  </svg>
+</div></section>
+
+<section id="grammar"><div class="wrap">
+  <h2>One grammar for every command</h2>
+  <div class="cards">
+    <div class="card"><h3><code>CMD:&lt;slots&gt;</code></h3><p>Individual motors. <b>Positional slots</b>: field N = motor N, an empty field skips that motor, a single value with no comma = motor 1. <code>P:1000,,3000</code> moves M1 and M3.</p></div>
+    <div class="card"><h3><code>CMD:M3=500,M17=1000</code></h3><p>Motor <b>names</b> instead of counting commas: <code>M3=500</code> for a value, <code>M3</code> for a selector or a read. Any order. The practical form past a dozen motors.</p></div>
+    <div class="card"><h3><code>CMDA[:value]</code></h3><p><b>All motors</b>: the <code>A</code> suffix. One value (or <code>?</code>) applies to every motor. <code>PA:5000</code>, <code>VA:0.5</code>, <code>BA</code>, <code>LA</code>, <code>HOA:?</code>.</p></div>
+    <div class="card"><h3><code>?</code> reads</h3><p>In any value slot: <code>P:?</code> (M1), <code>P:,,?</code> (M3), <code>V:M3</code>, <code>HO:?</code>, <code>VA:?</code> (all).</p></div>
+    <div class="card"><h3>Options in the head</h3><p>Stop type and homing method are the digit in the head: <code>B2:1,,1</code>, <code>H3A</code>. The status format follows a second colon: <code>S:M1:COMPACT</code>, <code>SA:FLAGS</code>.</p></div>
+    <div class="card"><h3>The one exception</h3><p>A bare head is an error (<code>ERR:L needs motor slots…</code>) — except <code>B</code>, <code>B1</code>, <code>B2</code>, <code>B3</code>, which always stop <b>every</b> motor. A stop is never refused.</p></div>
+  </div>
+  <h3 style="margin-top:22px">Units and limits</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>Quantity</th><th>Unit</th><th>Notes</th></tr>
+    <tr><td>position</td><td>encoder steps, signed 32-bit</td><td>steps per revolution = drive <code>P17</code> (4000 gives round numbers)</td></tr>
+    <tr><td>velocity</td><td>rps</td><td>0.1 rps resolution on the drive; 0.3 rps = 18 RPM; negative = reverse jog; 0.01–1000</td></tr>
+    <tr><td>acceleration / deceleration</td><td>rps/s</td><td>0.1–6553.5; ramp time = speed ÷ ramp</td></tr>
+    <tr><td>homing speeds</td><td>rps</td><td>0.01–20 (drive ceiling 1200 rpm; methods 1–4 allow 300 rpm = 5 rps)</td></tr>
+    <tr><td>homing offset</td><td>steps</td><td>sign = direction past the sensor</td></tr>
+  </table></div>
+  <p class="small muted">Heads may be upper or lower case. A non-numeric value parses as 0 — validate on the PC side. A motor name above the configured count is refused. Replies over about 300 characters arrive in several packets: each ends with <code>:MORE</code>, the last with <code>:END</code>.</p>
+</div></section>
+
+<section id="builder"><div class="wrap">
+  <h2>Command builder</h2>
+  <p class="lead">Pick a command, choose motors and values, and get the exact packet plus the reply the firmware will send. "Run" sends it to the simulator below.</p>
+  <div class="builder">
+    <div class="panel">
+      <div class="row">
+        <div class="field"><label class="l">Command</label><select id="b-cmd"></select></div>
+        <div class="field"><label class="l">Target</label><select id="b-target"><option value="slots">individual — positional slots</option><option value="names">individual — motor names</option><option value="all">all motors (A form)</option></select></div>
+        <div class="field" id="b-optwrap" style="display:none"><label class="l" id="b-optlabel">Option</label><select id="b-opt"></select></div>
+        <div class="field"><label class="l">Mode</label><select id="b-mode"><option value="set">set / act</option><option value="read">read (?)</option></select></div>
+      </div>
+      <div id="b-motors" class="motor-grid"></div>
+      <p class="small muted" id="b-hint"></p>
+    </div>
+    <div class="out panel">
+      <h4>Packet</h4><pre><code id="b-out">P:1000</code></pre>
+      <h4>Expected reply</h4><pre><code id="b-reply">OK</code></pre>
+      <div class="row"><button class="btn primary" id="b-run">Run in simulator</button><button class="btn" id="b-copy">Copy packet</button></div>
+      <p class="small muted" id="b-notes"></p>
+    </div>
+  </div>
+</div></section>
+
+<section id="commands"><div class="wrap">
+  <h2>Command reference</h2>
+  <p class="lead">Every command, both forms, what it triggers on the bus, every reply and error. Click a command to expand it; the search matches names, examples and reply text.</p>
+  <div class="cmd-tools">
+    <input type="text" id="q" placeholder="Search: e.g. homing, OK, limit, EEPROM, B2…">
+    <span class="chip btn-chip on" data-cat="all">All</span>
+    <span class="chip btn-chip" data-cat="motion">Motion</span>
+    <span class="chip btn-chip" data-cat="speed">Speed &amp; ramps</span>
+    <span class="chip btn-chip" data-cat="stop">Stopping</span>
+    <span class="chip btn-chip" data-cat="home">Zero &amp; homing</span>
+    <span class="chip btn-chip" data-cat="status">Status</span>
+    <span class="chip btn-chip" data-cat="ctrl">Controller</span>
+    <button class="btn small" id="expandAll">Expand all</button>
+  </div>
+  <div id="commandList"></div>
+</div></section>
+
+<section id="console"><div class="wrap">
+  <h2>Simulator</h2>
+  <p class="lead">A JavaScript model of the 0.5.1 firmware: the same parser, the same replies and errors, moves that take time, homing that completes, and drive inputs you can press to see the events. Nothing leaves your browser.</p>
+  <div class="console">
+    <div>
+      <div class="term" id="terminal" aria-live="polite"></div>
+      <div class="cmdline"><input type="text" id="cmd" placeholder="Type a command, e.g. IA  or  P:1000,,3000" autocomplete="off" spellcheck="false"><button class="btn primary" id="send">Send</button><button class="btn" id="clear">Clear</button></div>
+      <div class="shortcuts" id="shortcuts"></div>
+      <p class="small muted">↑/↓ recall history. The simulator assumes drive P17 = 4000 steps per revolution, 6 motors (change with <code>MC:n</code>), motor 2 absent (<code>EVENT:OFFLINE</code> behaviour), and uses a sketch value fingerprint for <code>SAVE</code> exactly like the firmware.</p>
+    </div>
+    <div class="panel">
+      <h4>Drive inputs (click to press)</h4>
+      <div id="drives"></div>
+      <p class="small muted" style="margin-top:8px">CW / CCW / SW are the limit and origin switch inputs. FLT raises a drive fault (over-current). PWR power-cycles the drive: it goes offline, then comes back at position 0.</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="events"><div class="wrap">
+  <h2>Events: what the controller sends on its own</h2>
+  <p class="lead">A background monitor reads one motor's status every 8 ms and pushes a datagram to <code>PC_IP:PC_PORT</code> on every change — one when a condition appears, one when it clears. Latency ≈ motor count × 13 ms.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Trigger on the drive</th><th>Event</th><th>What to do</th></tr>
+    <tr><td>CW limit input active / released (status bit 14)</td><td><code>EVENT:LIMIT:M2:CW POS=48211 ST=0x4677</code> · <code>EVENT:LIMIT:M2:CW_CLEARED</code></td><td>the drive stopped that direction; back off with <code>PR</code>, or re-home</td></tr>
+    <tr><td>CCW limit input active / released (bit 15)</td><td><code>EVENT:LIMIT:M2:CCW POS=-120 ST=0x8677</code> · <code>EVENT:LIMIT:M2:CCW_CLEARED</code></td><td>as above</td></tr>
+    <tr><td>origin switch (SW) covered / uncovered (bit 11)</td><td><code>EVENT:ORIGIN:M2:ON POS=1012 ST=0x1c37</code> · <code>EVENT:ORIGIN:M2:OFF</code></td><td>informational; methods 3/4/7/8/11/12 stop here</td></tr>
+    <tr><td>homing completed (bit 12 in homing mode)</td><td><code>EVENT:HOMED:M2 POS=0 ST=0x1437</code></td><td>position valid; safe to move</td></tr>
+    <tr><td>homing failed (bit 13 in homing mode)</td><td><code>EVENT:HOMING_ERROR:M2 ST=0x3437 (check limit/origin wiring, HV, HO)</code></td><td>check switches and P42, lower <code>HV</code>, <code>R:M2</code>, retry</td></tr>
+    <tr><td>fault bit rises / clears (bit 3)</td><td><code>EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT</code> · <code>EVENT:FAULT_CLEARED:M3</code></td><td><code>SD:M3</code> for the cause, fix it, <code>R:M3</code></td></tr>
+    <tr><td>two status reads in a row fail</td><td><code>EVENT:OFFLINE:M4</code></td><td>power, RS-485, slave ID; retried every 3 s</td></tr>
+    <tr><td>an offline drive answers again</td><td><code>EVENT:ONLINE:M4 ST=0x1437 (re-initialised)</code></td><td>re-initialised automatically; a power-cycled drive is back at position 0 — re-home or <code>ZO</code></td></tr>
+  </table></div>
+  <p class="small muted"><code>ERR=</code> is the raw 0x1001 register, decoded as <code>CURRENT VOLTAGE TEMP COMM OVERPOS PHASE GENERIC</code>. Target reached is <b>not</b> an event: poll <code>S:M1:COMPACT</code> for <code>TR</code>.</p>
+</div></section>
+
+<section id="decoder"><div class="wrap">
+  <h2>Status word decoder</h2>
+  <p class="lead">Paste the <code>ST=0x…</code> from any reply or event. Bits 10, 12 and 13 change meaning with the drive's mode, so pick the mode the controller last commanded.</p>
+  <div class="row">
+    <div class="field"><label class="l">Status word (hex)</label><input type="text" id="d-hex" value="0x1437" class="mono" style="width:140px"></div>
+    <div class="field"><label class="l">Mode</label><select id="d-mode"><option value="POS">position</option><option value="VEL">velocity</option><option value="HOM">homing</option></select></div>
+    <div class="field"><label class="l">Presets</label><div class="row">
+      <button class="btn small" data-st="0x1437">idle at target</button><button class="btn small" data-st="0x1637">running</button><button class="btn small" data-st="0x4437">CW limit</button><button class="btn small" data-st="0x1c37">on origin</button><button class="btn small" data-st="0x1538">fault</button>
+    </div></div>
+  </div>
+  <div class="bits" id="d-bits"></div>
+  <div class="row"><div><b>Drive state:</b> <span id="d-state" class="mono"></span></div><div><b>FLAGS:</b> <span id="d-flags" class="mono"></span></div><div><b>COMPACT:</b> <span id="d-compact" class="mono"></span></div></div>
+  <div class="tbl-wrap"><table id="d-table"></table></div>
+</div></section>
+
+<section id="settings"><div class="wrap">
+  <h2>How settings work</h2>
+  <div class="cards">
+    <div class="card"><h3>1. The admin configures the sketch</h3><p>Network, motor count, speeds, ramps and homing live in the "EDIT ME" blocks of <code>JMCMotors_6Motor</code>. Flash once. They are re-applied on every boot and whenever a drive comes back online.</p></div>
+    <div class="card"><h3>2. Runtime changes, kept without a cable</h3><p><code>V</code>, <code>ACC</code>, <code>DEC</code>, <code>HV</code>, <code>HVZ</code>, <code>HACC</code>, <code>HO</code>, <code>MC</code> last until reboot — unless the operator sends <code>SAVE</code>, which stores them in EEPROM. <code>SAVE:?</code> shows what is stored, <code>SAVE:CLEAR</code> forgets it, <code>LOAD</code> re-applies it.</p></div>
+    <div class="card"><h3>3. The sketch always wins after a re-flash</h3><p>The saved block carries a fingerprint of the sketch values it was made under and is ignored as soon as the admin flashes different ones. An old <code>SAVE</code> can never override a new flash.</p></div>
+  </div>
+</div></section>
+
+<section id="recipes"><div class="wrap">
+  <h2>Recipes</h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Goal</th><th>Send, in order</th><th>Expect</th></tr>
+    <tr><td>first contact</td><td><code>VER</code>, <code>IA</code>, <code>PA:?</code>, <code>SA:COMPACT</code></td><td><code>JMCMotors 0.5.1</code>, <code>Total motors detected: 6 of 6</code>, positions, <code>…|STP|TR|…</code></td></tr>
+    <tr><td>positioning cycle</td><td><code>VA:0.5</code>, <code>ACCA:0.3</code>, <code>DECA:0.3</code>, <code>P:4000,8000,12000</code>, <code>SA:COMPACT</code> until <code>TR</code>, <code>PA:0</code></td><td><code>OK</code> on each move</td></tr>
+    <tr><td>jog, then position</td><td><code>V:1</code>, <code>VS:M1</code>, <code>B</code>, <code>P:0</code></td><td><code>B</code> first avoids the deferred wait</td></tr>
+    <tr><td>home one axis</td><td><code>HV:0.2</code>, <code>HVZ:0.05</code>, <code>HO:1000</code>, <code>H3:M1</code>, wait for <code>EVENT:HOMED:M1</code>, <code>LS:M1</code></td><td><code>LIMITS: M1:… HOMED=1 MODE=HOM</code></td></tr>
+    <tr><td>home every axis, keep the settings</td><td><code>HVA:0.2</code>, <code>HVZA:0.05</code>, <code>HOA:500</code>, <code>H3A</code>, <code>SAVE</code></td><td>one <code>EVENT:HOMED:Mn</code> per motor</td></tr>
+    <tr><td>recover from a fault</td><td><code>EVENT:FAULT:M3 …</code> arrives → <code>SD:M3</code> → fix → <code>R:M3</code></td><td><code>Motor 3 reset complete</code>, <code>EVENT:FAULT_CLEARED:M3</code></td></tr>
+    <tr><td>handle a limit switch</td><td><code>EVENT:LIMIT:M2:CW …</code> arrives → <code>PR:M2=-2000</code></td><td><code>EVENT:LIMIT:M2:CW_CLEARED</code></td></tr>
+    <tr><td>drive power-cycled</td><td><code>EVENT:ONLINE:M4 …</code> arrives → <code>ZO:M4=&lt;known&gt;</code> or <code>H3:M4</code></td><td>counter restored</td></tr>
+    <tr><td>emergency</td><td><code>B3</code>, then <code>LA</code> only if the shafts must be free, <code>RA</code> when safe</td><td><code>Immediate brake applied to all motors</code></td></tr>
+    <tr><td>speed-scale check</td><td><code>V:1</code>, <code>VS:M1</code>, count 60 s, <code>B</code></td><td>exactly 60 revs; 600 ⇒ <code>setDriveP45(0)</code> in the sketch</td></tr>
+  </table></div>
+</div></section>
+
+<section id="migrate"><div class="wrap">
+  <h2>Changes from 0.4 to 0.5</h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>0.4</th><th>0.5</th><th>Why</th></tr>
+    <tr><td>bare <code>B</code>, <code>L</code>, <code>Z</code>, <code>R</code>, <code>I</code>, <code>VS</code>, <code>BS</code>, <code>ZS</code>, <code>LS</code>, <code>SD</code>, <code>DG</code> = all motors</td><td><code>BA</code>, <code>LA</code>, <code>ZA</code>, <code>RA</code>, <code>IA</code>, <code>VSA</code>, <code>BSA</code>, <code>ZSA</code>, <code>LSA</code>, <code>SDA</code>, <code>DGA</code>; bare selector = error, except bare <code>B</code>–<code>B3</code></td><td>one rule: the A suffix is the only all-motors form</td></tr>
+    <tr><td><code>all</code> keyword</td><td>removed</td><td>same</td></tr>
+    <tr><td><code>AD:acc/dec</code>, <code>ADA</code></td><td><code>ACC</code>, <code>ACCA</code>, <code>DEC</code>, <code>DECA</code>, each like <code>V</code></td><td>two settings</td></tr>
+    <tr><td><code>S:0</code>, <code>S:2,COMPACT</code>, <code>DG:1</code></td><td><code>SA</code>, <code>S:M2:COMPACT</code>, <code>DG:M1</code></td><td>slots and names everywhere</td></tr>
+    <tr><td><code>V:?</code>, <code>HO:?</code> read all</td><td><code>V:?</code> = motor 1, <code>VA:?</code> = all</td><td><code>?</code> follows the slot rule</td></tr>
+    <tr><td><code>Set Motor 1 V: 0.50</code></td><td><code>Set V: M1=0.50 rps</code></td><td>labelled values, one format</td></tr>
+    <tr><td>—</td><td><code>M3=500</code> / <code>M1,M3</code> names; <code>HVZ</code>, <code>HACC</code>; <code>SAVE</code>/<code>LOAD</code>; <code>VER</code>, <code>PING</code>; <code>:MORE</code>/<code>:END</code></td><td>software-friendly</td></tr>
+    <tr><td><code>INVALID COMMAND</code></td><td><code>ERR:unknown command &lt;HEAD&gt;</code></td><td>names the head</td></tr>
+  </table></div>
+</div></section>
+
+</main>
+<footer><div class="wrap">JMCMotors · MIT · LAGARI A · <a href="https://github.com/ailagari/JMCMotors">github.com/ailagari/JMCMotors</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/PROTOCOL.md">PROTOCOL.md</a> · <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/HARDWARE.md">HARDWARE.md</a> · Verified against the JMC Modbus-RTU manual V2.2.</div></footer>
+
+<script>
+/* ============================================================ theme */
+(function(){const r=document.documentElement;try{const t=localStorage.getItem('jmc-theme');if(t)r.setAttribute('data-theme',t);}catch(e){}
+document.getElementById('theme').onclick=()=>{const cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');const nx=cur==='light'?'dark':'light';r.setAttribute('data-theme',nx);try{localStorage.setItem('jmc-theme',nx);}catch(e){}};})();
+
+/* ============================================================ command data */
+const COMMANDS=[
+{id:'P',title:'Absolute position move',cat:'motion',shape:'values',unit:'steps',allName:'PA',
+ forms:{ind:'P:1000,,3000',names:'P:M17=1000,M3=500',all:'PA:5000',read:'P:?  ·  P:,,?  ·  P:M3  ·  PA:?'},
+ examples:[['P:10000','motor 1 → step 10000','OK'],['P:1000,2000,3000','M1, M2, M3 launched together','OK'],['P:500,,1500','M1 → 500, skip M2, M3 → 1500','OK'],['P:-40000','negative targets are fine','OK'],['PA:5000','every motor → 5000, broadcast, at motor 1\'s V speed','OK'],['P:?','read M1','M1=10000'],['P:?,?','read M1 and M2','M1=10000,M2=2000'],['PA:?','read every motor','M1=…,M2=…,…']],
+ triggers:'Per motor the target (0x607A) and the stored V speed are written, then the move is launched: broadcast frames when every motor is addressed, per motor (~5 ms apart) for a subset. The target takes effect immediately (control-word bit 5); the controller waits up to 100 ms for status bit 12 ("can set new position") before the bit-4 edge. OK means launched, not arrived — poll S:…:COMPACT for TR. Sent while motors are jogging, it first brakes them on the DEC ramp and answers OK when the move really starts.',
+ errors:['ERR:P needs values (e.g. P:1000,,3000 or P:M3=1000) - PA:<value> = all motors','ERR:PA takes one value for all motors (e.g. PA:1000)','ERR:P motor must be M1..M6 (e.g. P:M3=1000)','ERR:P cannot mix values and ?']},
+{id:'PR',title:'Relative position move',cat:'motion',shape:'values',unit:'steps',allName:'PRA',
+ forms:{ind:'PR:-500,,200',names:'PR:M2=-2000',all:'PRA:-250',read:'PR:?  ·  PRA:?'},
+ examples:[['PR:1000','motor 1 forward 1000 steps','OK'],['PR:-1000','motor 1 back 1000 steps','OK'],['PR:500,,-500','M1 +500, M3 −500, synchronised','OK'],['PRA:-250','every motor back 250 steps','OK']],
+ triggers:'Same as P, but each value is a delta from the motor\'s current position, applied inside the drive (control-word bit 6) so there is no read-modify-write race even mid-move.',
+ errors:['same as P, with PR in the messages']},
+{id:'V',title:'Run velocity per motor (rps)',cat:'speed',shape:'values',unit:'rps',allName:'VA',
+ forms:{ind:'V:0.5,,0.3',names:'V:M1=0.5,M3=0.3',all:'VA:1',read:'V:?  ·  V:M3  ·  VA:?'},
+ examples:[['V:0.5','motor 1 = 0.5 rps (stored; written at the next move or jog)','Set V: M1=0.50 rps'],['V:0.5,1,0.3','per motor','Set V: M1=0.50,M2=1.00,M3=0.30 rps'],['V:-0.5','negative = reverse direction for VS','Set V: M1=-0.50 rps'],['VA:1','every motor; also broadcast to the drives now, so a running jog changes speed at once','VA: all motors = 1.00 rps (BROADCAST)'],['V:?','read motor 1','V: M1=0.50 rps'],['VA:?','read all','V: M1=0.30,M2=0.30,… rps']],
+ triggers:'Stored in the controller and used by the next P/PR/PA move or VS jog. Nothing is written to the drive until then (VA is the exception: it broadcasts the speed immediately). Default 0.3 rps = 18 RPM. Range 0.01–1000 in magnitude.',
+ errors:['ERR:V needs values (…)','ERR:V range 0.01..1000.0 rps (M2)','ERR:V cannot mix values and ?']},
+{id:'VS',title:'Start velocity mode (endless jog)',cat:'speed',shape:'selector',allName:'VSA',
+ forms:{ind:'VS:1,,1',names:'VS:M1,M3',all:'VSA'},
+ examples:[['VSA','all motors jog at their V speeds, broadcast start','VS: velocity mode started (stop with B)'],['VS:1,,1','motors 1 and 3 only','VS: velocity mode started for M1,3 (stop with B)']],
+ triggers:'Cancels any deferred move; per motor, following the manual\'s velocity-mode routine: halt (0x010F), select velocity mode, write the motor\'s own speed — nothing turns yet; then one broadcast release when every motor is selected (all shafts start together) or a per-motor release for a subset. Velocity mode consumes no position range. Leave it with B; P/PR, Z, ZO and H brake on the DEC ramp first.',
+ errors:['ERR:VS needs motor slots (e.g. VS:1,,1 or VS:M1,M3) - VSA = all motors']},
+{id:'ACC',title:'Acceleration per motor (rps/s)',cat:'speed',shape:'values',unit:'rps/s',allName:'ACCA',
+ forms:{ind:'ACC:0.2,,0.5',names:'ACC:M3=0.5',all:'ACCA:0.3',read:'ACC:?  ·  ACCA:?'},
+ examples:[['ACC:0.2,,0.5','M1 0.2, M3 0.5 rps/s, written to the drives now','Set ACC: M1=0.20,M3=0.50 rps/s'],['ACCA:0.3','every motor','ACCA: all motors = 0.30 rps/s'],['ACC:?','read motor 1','ACC: M1=0.50 rps/s']],
+ triggers:'Written to drive register 0x6083 immediately and remembered for every re-initialisation. Ramp time = speed ÷ ramp. Pair a slow ramp with drive P19 = 7 on geared mechanisms. Range 0.1–6553.5.',
+ errors:['ERR:ACC range 0.1..6553.5 rps/s (M2)','ERR:ACC needs values (…)']},
+{id:'DEC',title:'Deceleration per motor (rps/s)',cat:'speed',shape:'values',unit:'rps/s',allName:'DECA',
+ forms:{ind:'DEC:0.2,,0.1',names:'DEC:M3=0.1',all:'DECA:0.1',read:'DEC:?  ·  DECA:?'},
+ examples:[['DEC:0.1','motor 1 decel 0.1 rps/s','Set DEC: M1=0.10 rps/s'],['DECA:0.1','every motor','DECA: all motors = 0.10 rps/s']],
+ triggers:'Written to 0x6084 and also to the quick-stop ramp 0x6085 (used by B2). This is the ramp the controller brakes a jog on before a move, Z, ZO or homing.',
+ errors:['ERR:DEC range 0.1..6553.5 rps/s (M2)']},
+{id:'B',title:'Stop (type 0–3 in the head)',cat:'stop',shape:'selector',allName:'BA',opt:{label:'Stop type',values:[['','B — controlled stop on the DEC ramp'],['1','B1 — quick stop on the decel ramp'],['2','B2 — fast brake (quick-stop ramp)'],['3','B3 — immediate stop']]},
+ forms:{ind:'B2:1,,1',names:'B:M2',all:'B2A  ·  bare B / B1 / B2 / B3'},
+ examples:[['B','controlled stop, ALL motors (bare stop = all, always)','All motors stopped with deceleration'],['B:,1','controlled stop, motor 2','Motor 2 stopped with deceleration'],['B1A','quick stop on the decel ramp, all','Deceleration brake applied to all motors'],['B2:M1,M3','fast brake, motors 1 and 3','Fast brake applied to motor 1,3'],['B3','immediate stop, all — the emergency stop','Immediate brake applied to all motors']],
+ triggers:'Cancels any move waiting for a jog to brake ("stop wins"), then: B = halt bit (the drive\'s halt code is set to 1 = halt on the current deceleration at every init); B1/B2/B3 = quick-stop code 1/2/3 then the quick-stop control word. After a stop the next P or VS re-enables the drive. BS reports the result.',
+ errors:['ERR:B type is B, B1, B2 or B3','ERR:B motor must be M1..M6']},
+{id:'L',title:'Loosen brakes (release torque)',cat:'stop',shape:'selector',allName:'LA',
+ forms:{ind:'L:,1',names:'L:M2',all:'LA'},
+ examples:[['LA','all motors','All motor brakes loosened'],['L:,1','motor 2','Motor 2 brake loosened'],['L:1,,1','motors 1 and 3','Motor 1,3 brake loosened']],
+ triggers:'Control word "brake open" (0x0003): the brake opens and motor torque is off, so the shaft can be turned by hand and will not hold position. The next move re-enables the drive.',
+ errors:['ERR:L needs motor slots (e.g. L:1,,1 or L:M1,M3) - LA = all motors']},
+{id:'BS',title:'Brake status',cat:'stop',shape:'selector',allName:'BSA',
+ forms:{ind:'BS:,1',names:'BS:M2',all:'BSA'},
+ examples:[['BSA','every motor','BRAKE STATUS: M1:FREE/RUN,M2:BRAKE/STOP,M3:ERROR | SUMMARY: MIXED'],['BS:,1','motor 2','BRAKE STATUS: M2:BRAKE/STOP | SUMMARY: BRAKED']],
+ triggers:'Reads the status word: BRAKE = halted (bit 8) or not enabled (bit 2 clear), FREE otherwise; RUN/STOP from bit 9; SUMMARY BRAKED / FREE / MIXED / ERROR.',
+ errors:['ERR:BS needs motor slots (…)']},
+{id:'Z',title:'Current position becomes 0',cat:'home',shape:'selector',allName:'ZA',
+ forms:{ind:'Z:1,,1',names:'Z:M1,M3',all:'ZA'},
+ examples:[['ZA','all motors read 0 where they stand','All motors set to zero position'],['Z:1,,1','motors 1 and 3','Motor 1,3 set to zero position']],
+ triggers:'A jogging motor is braked to standstill first (blocking, ≤ 5 s). Then homing method 0 ("current position is the origin") with offset 0, a 20 ms pause, back to position mode. Nothing moves. ZS shows the flag.',
+ errors:['ERR:Z needs motor slots (…)']},
+{id:'ZO',title:'Current position becomes a value',cat:'home',shape:'values',unit:'steps',allName:'ZOA',
+ forms:{ind:'ZO:10000,,500',names:'ZO:M4=12000',all:'ZOA:5000'},
+ examples:[['ZO:10000','where motor 1 is now reads 10000','ZO: M1=10000 (current position redefined)'],['ZO:10000,,500','M1 reads 10000, M3 reads 500','ZO: M1=10000,M3=500 (current position redefined)'],['ZOA:5000','every motor reads 5000','ZO: M1=5000,M2=5000,… (current position redefined)']],
+ triggers:'Like Z but with the value in the drive\'s home-offset register (0x607C, the same register HO uses — which is why every H<n> re-writes HO first). Use it to restore a known coordinate after a drive power cycle.',
+ errors:['ERR:ZO needs values (…)','ERR:ZO takes values, not ? (read positions with P:?)']},
+{id:'ZS',title:'Zero status',cat:'home',shape:'selector',allName:'ZSA',
+ forms:{ind:'ZS:,1',names:'ZS:M2',all:'ZSA'},
+ examples:[['ZSA','every motor','ZERO STATUS: M1:ZERO(0),M2:NOT_SET(1500),M3:ERROR | ZERO_NOT_SET']],
+ triggers:'ZERO = a Z or ZO was applied since boot. Homing does not set this flag (see LS). The number in brackets is the live position.',
+ errors:['ERR:ZS needs motor slots (…)']},
+{id:'HV',title:'Homing search speed (rps)',cat:'home',shape:'values',unit:'rps',allName:'HVA',
+ forms:{ind:'HV:0.3,,0.5',names:'HV:M3=0.5',all:'HVA:0.2',read:'HV:?  ·  HVA:?'},
+ examples:[['HV:0.3,,0.5','per motor; written to 0x6099 now','Set HV: M1=0.30,M3=0.50 rps'],['HVA:0.2','every motor','HVA: all motors = 0.20 rps'],['HV:?','read motor 1','HV: M1=0.30 rps']],
+ triggers:'Written to the drive now and re-applied before every homing and re-init. Default 0.3 rps. The drive allows at most 300 rpm (methods 1–4, i.e. 5 rps) or 1200 rpm (5–12); the command accepts 0.01–20 rps.',
+ errors:['ERR:HV range 0.01..20.0 rps (M2)']},
+{id:'HVZ',title:'Homing zero-find speed (rps)',cat:'home',shape:'values',unit:'rps',allName:'HVZA',
+ forms:{ind:'HVZ:0.05',names:'HVZ:M3=0.05',all:'HVZA:0.05',read:'HVZ:?  ·  HVZA:?'},
+ examples:[['HVZ:0.05','motor 1 final approach speed (0x609B)','Set HVZ: M1=0.05 rps'],['HVZA:0.05','every motor','HVZA: all motors = 0.05 rps']],
+ triggers:'The slow final approach after the switch is found. Unset, it follows HV; set it lower than HV for repeatable zeros with the fast methods 5–12.',
+ errors:['ERR:HVZ range 0.01..20.0 rps (M2)']},
+{id:'HACC',title:'Homing acceleration (rps/s)',cat:'home',shape:'values',unit:'rps/s',allName:'HACCA',
+ forms:{ind:'HACC:0.2,,0.5',names:'HACC:M3=0.5',all:'HACCA:0.2',read:'HACC:?  ·  HACCA:?'},
+ examples:[['HACC:0.2','motor 1 homing ramp (0x609A)','Set HACC: M1=0.20 rps/s'],['HACCA:0.2','every motor','HACCA: all motors = 0.20 rps/s']],
+ triggers:'The drive\'s own homing ramp. Unset, it follows the motor\'s ACC.',
+ errors:['ERR:HACC range 0.1..6553.5 rps/s (M2)']},
+{id:'HO',title:'Homing offset (steps past the sensor)',cat:'home',shape:'values',unit:'steps',allName:'HOA',
+ forms:{ind:'HO:1000,,-800',names:'HO:M3=-800',all:'HOA:500',read:'HO:?  ·  HO:M3  ·  HOA:?'},
+ examples:[['HO:1000','motor 1 stops 1000 steps past the sensor','HO: M1=1000 steps after sensor (used at next homing)'],['HO:1000,,-800','negative = the other direction','HO: M1=1000,M3=-800 steps after sensor (used at next homing)'],['HOA:?','read all','HO: M1=1000,M2=0,…']],
+ triggers:'Stored in the controller, written to 0x607C now, and re-written before every H<n> and every drive re-initialisation.',
+ errors:['ERR:HO needs values (…)','ERR:HO cannot mix values and ?']},
+{id:'H',title:'Start homing (method 1–12 in the head)',cat:'home',shape:'selector',allName:'H3A',opt:{label:'Method',values:[['1','1 — to the CW limit'],['2','2 — to the CCW limit'],['3','3 — origin switch, CW first (CW limit as fallback)'],['4','4 — origin switch, CCW first'],['5','5 — fast to CW limit, back off, re-approach'],['6','6 — fast to CCW limit'],['7','7 — fast to origin, CW first'],['8','8 — fast to origin, CCW first'],['9','9 — as 5, signed offset'],['10','10 — as 6, signed offset'],['11','11 — as 7, signed offset'],['12','12 — as 8, signed offset']]},
+ forms:{ind:'H3:1,,1',names:'H3:M1,M3',all:'H3A'},
+ examples:[['H3A','home all motors, method 3','Homing method 3 started for all motors'],['H3:1,,1','motors 1 and 3','Homing method 3 started for M1,3'],['H1:M2','motor 2, method 1','Homing method 1 started for M2'],['— later —','pushed when the drive finishes','EVENT:HOMED:M1 POS=0 ST=0x1437  or  EVENT:HOMING_ERROR:M1 ST=0x3437 (…)']],
+ triggers:'Per motor: brake to standstill if jogging (≤ 5 s) → re-write HV, HVZ, HACC, HO → homing mode → method → bit-4 pulse → the monitor is armed. The reply means started; completion arrives as EVENT:HOMED, failure as EVENT:HOMING_ERROR; LS shows HOMED=BUSY meanwhile. Methods ending on a limit also raise the normal EVENT:LIMIT on the way. The drive stays in homing mode until the next move, which switches it back.',
+ errors:['ERR:homing method H1..H12','ERR:H needs motor slots (e.g. H:1,,1 or H:M1,M3) - HA = all motors']},
+{id:'S',title:'Status word, six formats',cat:'status',shape:'selector',allName:'SA',opt:{label:'Format',values:[['','RAW'],['COMPACT','COMPACT'],['STATE','STATE'],['BITS','BITS'],['FLAGS','FLAGS'],['DETAIL','DETAIL']]},
+ forms:{ind:'S:1,,1:COMPACT',names:'S:M1:FLAGS',all:'SA  ·  SA:COMPACT'},
+ examples:[['SA','raw, every motor','STATUS:M1=0x1437,M2=ERROR,M3=0x1637'],['S:M1:COMPACT','enabled | moving | target reached | pos | vel','M1:RUN|STP|TR|POS=10000|VEL=0.0'],['SA:STATE','drive state name','STATES:M1:Device enable,M2:ERROR'],['S:M1:BITS','16 bits, high to low','M1:0001 0100 0011 0111'],['S:M1:FLAGS','named bits, mode-aware','M1:READY|INIT|ENABLED|WORKING|QSTOP|REACHED|SETPOINT_OK'],['SA:DETAIL','one multi-line packet per motor (:MORE/:END)','M1 (ID 1)\n  Status: 0x1437 (Device enable)\n  Mode:   position\n  Flags:  …\n  Bits:   …\n  Pos:    10000\n  Vel:    0.0 rps']],
+ triggers:'One status read per motor (plus position and velocity for COMPACT/DETAIL). FLAGS names bits 10/12/13 by the mode the controller last commanded: position REACHED/SETPOINT_OK/POSERR, velocity AT_SPEED/VEL_ZERO/MAX_ACCEL, homing HOME_REACHED/HOMED/HOME_ERROR.',
+ errors:['ERR:S needs motor slots (…) - SA = all motors','ERR:S formats RAW|COMPACT|DETAIL|STATE|BITS|FLAGS']},
+{id:'SD',title:'Detailed status in plain language',cat:'status',shape:'selector',allName:'SDA',
+ forms:{ind:'SD:,,1',names:'SD:M3',all:'SDA'},
+ examples:[['SD:M1','one packet per motor','=== MOTOR 1 (Slave ID 1) Status 0x1437 ===\nState: Device enable\nMode: position\nMotor: ENABLED, stopped\nPosition: 10000 steps (target REACHED)\nVelocity: 0.0 rps\nHoming: homed | Origin switch (SW): off\nLimits: CW clear | CCW clear\nHealth: OK, no faults']],
+ triggers:'Reads status, position, velocity and (on a fault) the error register. Homing line is mode-aware; on a fault the last line is "FAULT: over-current (0x1001=0x2) -> send R:M1 to reset"; a dead drive reads "=== MOTOR 2 === NOT RESPONDING (TIMEOUT) - check power, slave ID, RS485 wiring".',
+ errors:['ERR:SD needs motor slots (…)']},
+{id:'LS',title:'Limit switches, origin switch and homing state',cat:'status',shape:'selector',allName:'LSA',
+ forms:{ind:'LS:1,,1',names:'LS:M1,M3',all:'LSA'},
+ examples:[['LSA','every motor on one line','LIMITS: M1:CW=0 CCW=0 SW=1 HOMED=1 MODE=POS,M2:CW=1 CCW=0 SW=0 HOMED=BUSY MODE=HOM,M3:ERROR']],
+ triggers:'CW/CCW = limit inputs (bits 14/15), SW = origin input (bit 11), HOMED = 0 / BUSY / 1 / ERR (bit 12/13 in homing mode, latched afterwards), MODE = POS / VEL / HOM as last commanded.',
+ errors:['ERR:LS needs motor slots (…)']},
+{id:'DG',title:'Low-level register diagnosis',cat:'status',shape:'selector',allName:'DGA',
+ forms:{ind:'DG:,,1',names:'DG:M1',all:'DGA'},
+ examples:[['DG:M1','what the drive really holds, plus two harmless write tests','DG M1: fmt6000=0 st6041=0x1437 mode6061=1 err1001=0x0\ntgt607A=0,10000 vel6081=0,3 acc6083=5 dec6084=5 pos6064=0,10000\nWRITE06=OK WRITE10=OK libScale=10']],
+ triggers:'Reads nine registers and tests both Modbus write function codes by re-writing values already in the drive (nothing moves). Use when a motor replies OK but does not move: vel6081=0,0 → speed 0; tgt607A unchanged → writes not landing; mode6061 wrong → R.',
+ errors:['ERR:DG needs motor slots (…)']},
+{id:'I',title:'Detect and initialise',cat:'ctrl',shape:'selector',allName:'IA',
+ forms:{ind:'I:1,,1',names:'I:M1,M3',all:'IA'},
+ examples:[['IA','every configured slot','MOTOR INITIALIZATION:\nMotor 1 (Slave ID 1): DETECTED - Initialized in Position mode\n  Status: 0x1437 (Device enable)\n  Position: 10000\nMotor 2 (Slave ID 2): NOT DETECTED (TIMEOUT)\n  Check: Power, Address, RS485 wiring\n…\nTotal motors detected: 5 of 6']],
+ triggers:'Cancels any deferred move; per motor: enable sequence, position mode, halt code, ramps, homing parameters; marks online/offline for the monitor. The homed flag is kept; nothing moves. When every selected motor answers a final "SUCCESS: …" line is appended.',
+ errors:['ERR:I needs motor slots (…)']},
+{id:'R',title:'Alarm reset and re-initialise',cat:'ctrl',shape:'selector',allName:'RA',
+ forms:{ind:'R:,,1',names:'R:M3',all:'RA'},
+ examples:[['RA','all motors','All motors reset complete'],['R:M3','motor 3','Motor 3 reset complete'],['R:,1','motor 2 that fails to come back','Motor 2(FAIL) reset complete']],
+ triggers:'Control-word reset (bit 7), then full re-init with the motor\'s ramps and homing parameters. Clears the fault flag in the monitor so a persisting fault is reported again.',
+ errors:['ERR:R needs motor slots (…)']},
+{id:'MC',title:'Motor count',cat:'ctrl',shape:'ctrl',
+ forms:{all:'MC:?  ·  MC:12'},
+ examples:[['MC:?','read','MC: 6 motors (slave IDs 1..6)'],['MC:12','set; new slots are probed and initialised','MC: 12 motors, 7 online (SAVE to keep across reboot)']],
+ triggers:'Slave IDs 1..n, 1–32. Kept across reboot only by SAVE.',
+ errors:['ERR:MC range 1..32']},
+{id:'SAVE',title:'Keep settings in EEPROM',cat:'ctrl',shape:'ctrl',
+ forms:{all:'SAVE  ·  SAVE:?  ·  SAVE:CLEAR  ·  LOAD'},
+ examples:[['SAVE','store V, ACC, DEC, HV, HVZ, HACC, HO, MC','SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC) - applied at every boot until the sketch is re-flashed with other values'],['SAVE:?','what is stored, and does it apply?','SAVE: settings stored and applied at boot (SAVE:CLEAR to forget)'],['SAVE:CLEAR','forget it','SAVE: cleared - sketch values apply at next boot'],['LOAD','apply the stored block now, even if the sketch changed','LOAD: 6 motors loaded and applied']],
+ triggers:'The block carries a fingerprint of the sketch values it was saved under and is applied at boot only while that fingerprint still matches — re-flashing with other values makes the sketch win again. CRC-protected.',
+ errors:['ERR:SAVE use SAVE, SAVE:? or SAVE:CLEAR','ERR:SAVE EEPROM too small','ERR:LOAD nothing stored (or checksum failed)']},
+{id:'VER',title:'Version · PING · reboot',cat:'ctrl',shape:'ctrl',
+ forms:{all:'VER  ·  PING  ·  X'},
+ examples:[['VER','firmware version','JMCMotors 0.5.1'],['PING','link check, no bus traffic','PONG'],['X','soft reset; runtime settings revert to the sketch or the saved block','System restart initiated...  then  Motor ready on PC_PORT']],
+ triggers:'',errors:['ERR:unknown command <HEAD> for anything else']},
+];
+const CAT_NAMES={motion:'Motion',speed:'Speed & ramps',stop:'Stopping',home:'Zero & homing',status:'Status',ctrl:'Controller'};
+
+/* ============================================================ simulator */
+const STEPS_PER_REV=4000;
+const Sim=(function(){
+  const S={count:6,m:[],saved:null,sketchCrc:0,pending:null,chunked:false,log:[]};
+  function newMotor(i){return {id:i+1,online:true,pos:0,vel:0,storedVel:0.3,acc:0.5,dec:0.5,hv:0.3,hvz:null,hacc:null,ho:0,mode:'POS',enabled:true,halted:false,qstop:false,fault:false,errReg:0,cw:false,ccw:false,sw:false,homed:false,homingArmed:false,homeErr:false,homingT:0,zeroSet:false,moving:false,target:0,jog:false,moveVel:0,failCnt:0,offlineUntil:0,lastSeenOnline:true};}
+  function init(){S.m=[];for(let i=0;i<32;i++){S.m.push(newMotor(i));}S.m[1].online=false;S.m[1].lastSeenOnline=false;S.sketchCrc=fingerprint();}
+  function fingerprint(){let h=0;const feed=v=>{h=(h*31+Math.round((+v||0)*1000)+7)|0;};feed(S.count);for(let i=0;i<S.count;i++){const m=S.m[i];feed(m.storedVel);feed(m.acc);feed(m.dec);feed(m.hv);feed(m.hvz??-1);feed(m.hacc??-1);feed(m.ho);}return h;}
+  const out=[];function reply(s){out.push({k:'rx',s});}function event(s){emit({k:'ev',s});}
+  let emit=()=>{};
+  function sw(m){ // synthesize status word
+    if(!m.online) return null;
+    let s=0x0001|0x0002|0x0010;
+    if(m.enabled)s|=0x0004; if(m.fault)s|=0x0008; if(!m.qstop)s|=0x0020; if(m.halted)s|=0x0100;
+    if(m.moving||m.jog)s|=0x0200; if(m.sw)s|=0x0800; if(m.cw)s|=0x4000; if(m.ccw)s|=0x8000;
+    if(m.mode==='POS'){ if(!m.moving)s|=0x0400|0x1000; }
+    else if(m.mode==='VEL'){ if(m.jog)s|=0x0400; if(!m.jog)s|=0x1000; }
+    else { if(m.homed)s|=0x0400|0x1000; if(m.homeErr)s|=0x2000; }
+    if(m.fault) s=(s&~0x000F)|0x000F;
+    return s;
+  }
+  const hex=v=>'0x'+v.toString(16);
+  function stateName(s){switch(s&0xF){case 0:return'Uninitialized';case 1:return'Initialized';case 3:return'Power on';case 7:return(s&0x20)?'Device enable':'Quick stop active';case 0xF:return'Fault alarm';case 8:return'Error state';default:return'Unknown';}}
+  function flagsString(s,mode){const n=['READY','INIT','ENABLED','FAULT','WORKING','QSTOP','INITSTATE','WARN','HALT','RUN','REACHED','SWORIGIN','SETPOINT_OK','POSERR','CWLIM','CCWLIM'];if(mode==='VEL'){n[10]='AT_SPEED';n[12]='VEL_ZERO';n[13]='MAX_ACCEL';}else if(mode==='HOM'){n[10]='HOME_REACHED';n[12]='HOMED';n[13]='HOME_ERROR';}const o=[];for(let b=0;b<16;b++)if(s&(1<<b))o.push(n[b]);return o.length?o.join('|'):'NONE';}
+  function bitsString(s){let o='';for(let b=15;b>=0;b--){o+=(s&(1<<b))?'1':'0';if(b===12||b===8||b===4)o+=' ';}return o;}
+  const modeName=m=>m==='POS'?'position':m==='VEL'?'velocity':'homing';
+  const f2=v=>(Math.round(v*100)/100).toFixed(2);
+  const f1=v=>(Math.round(v*10)/10).toFixed(1);
+  // ---- parsing
+  function motorIndexOf(name){name=name.trim();if(!/^[Mm]\d+$/.test(name))return -1;const n=parseInt(name.slice(1));return(n>=1&&n<=S.count)?n-1:-1;}
+  function parseValues(csv,all){const F={active:[],query:[],l:[],f:[],n:0,nq:0};for(let i=0;i<S.count;i++){F.active[i]=false;F.query[i]=false;F.l[i]=0;F.f[i]=0;}
+    const set=(i,v)=>{F.active[i]=true;F.n++;if(v==='?'){F.query[i]=true;F.nq++;}else{F.l[i]=parseInt(v)||0;F.f[i]=parseFloat(v)||0;}};
+    let s=csv.trim();if(!s.length)return{n:0,F};
+    if(all){if(s.includes(','))return{n:-1,F};for(let i=0;i<S.count;i++)set(i,s);return{n:S.count,F};}
+    if(/^[Mm]/.test(s)){for(const part0 of s.split(',')){const part=part0.trim();if(!part)continue;const eq=part.indexOf('=');const name=eq<0?part:part.slice(0,eq).trim();const val=eq<0?'?':part.slice(eq+1).trim();const idx=motorIndexOf(name);if(idx<0||!val.length)return{n:-1,F};if(!F.active[idx])set(idx,val);}return{n:F.n,F};}
+    if(!s.includes(',')){set(0,s);return{n:1,F};}
+    const parts=s.split(',');for(let i=0;i<S.count&&i<parts.length;i++){const p=parts[i].trim();if(p.length)set(i,p);}return{n:F.n,F};}
+  function parseSelection(csv,all){const sel=[];for(let i=0;i<S.count;i++)sel[i]=false;if(all){for(let i=0;i<S.count;i++)sel[i]=true;return{n:S.count,sel};}
+    let s=csv.trim();if(!s.length)return{n:0,sel};let n=0;
+    if(/^[Mm]/.test(s)){for(const part0 of s.split(',')){let part=part0.trim();if(!part)continue;const eq=part.indexOf('=');if(eq>=0)part=part.slice(0,eq);const idx=motorIndexOf(part);if(idx<0)return{n:-1,sel};if(!sel[idx]){sel[idx]=true;n++;}}return{n,sel};}
+    const parts=s.split(',');for(let i=0;i<S.count&&i<parts.length;i++){if(parts[i].trim().length){sel[i]=true;n++;}}return{n,sel};}
+  function selErr(cmd,n){if(n>0)return false;if(n<0)reply(`ERR:${cmd} motor must be M1..M${S.count}`);else reply(`ERR:${cmd} needs motor slots (e.g. ${cmd}:1,,1 or ${cmd}:M1,M3) - ${cmd}A = all motors`);return true;}
+  function valErr(cmd,n,all){if(n>0)return false;if(all)reply(`ERR:${cmd}A takes one value for all motors (e.g. ${cmd}A:1000)`);else if(n<0)reply(`ERR:${cmd} motor must be M1..M${S.count} (e.g. ${cmd}:M3=1000)`);else reply(`ERR:${cmd} needs values (e.g. ${cmd}:1000,,3000 or ${cmd}:M3=1000) - ${cmd}A:<value> = all motors`);return true;}
+  const MOTOR_CMDS=['P','PR','V','VS','ACC','DEC','L','BS','Z','ZO','ZS','HV','HVZ','HACC','HO','S','SD','LS','DG','I','R','B'];
+  function isMotorCommand(b){if(MOTOR_CMDS.includes(b))return true;if(b.length>=2&&(b[0]==='B'||b[0]==='H')&&/^\d+$/.test(b.slice(1)))return true;return false;}
+  const listOf=sel=>{const o=[];for(let i=0;i<S.count;i++)if(sel[i])o.push(i+1);return o.join(',');};
+  // chunking
+  const CH=300;function chunk(parts,header,trailer){ // parts: array of strings joined by ','
+    let out=header,first=true,chunked=false;for(const p of parts){if(!first)out+=',';first=false;out+=p;if(out.length>=CH){reply(out+':MORE');chunked=true;out=header;first=true;}}reply(out+(trailer||'')+(chunked?':END':''));}
+  function multi(packets){if(packets.length===1){reply(packets[0]);return;}packets.forEach((p,i)=>reply(p+(i===packets.length-1?':END':':MORE')));}
+  // ---- handlers
+  function rampDown(sel){let any=false;for(let i=0;i<S.count;i++){const m=S.m[i];if(sel[i]&&m.jog){m.jog=false;m.vel=0;m.halted=true;any=true;}}return any;}
+  function launchMove(sel,target,absolute,all){for(let i=0;i<S.count;i++){const m=S.m[i];if(!sel[i]||!m.online)continue;m.mode='POS';m.homingArmed=false;m.halted=false;m.qstop=false;m.enabled=true;m.jog=false;const v=all?S.m[0].storedVel:m.storedVel;m.target=absolute?target[i]:m.pos+target[i];m.moveVel=Math.abs(v)*STEPS_PER_REV;m.moving=(m.target!==m.pos);}}
+  function handlePosition(args,absolute,all){const cmd=absolute?'P':'PR';const{n,F}=parseValues(args,all);if(valErr(cmd,n,all))return;
+    if(F.nq){if(F.nq!==F.n){reply(`ERR:${cmd} cannot mix values and ?`);return;}replyPositions(F.query);return;}
+    const braking=rampDown(F.active);if(braking){S.pending={args,absolute,all,t:Date.now()+800};return;}
+    launchMove(F.active,F.l,absolute,all);reply('OK');}
+  function replyPositions(sel){const parts=[];let anyErr=false;for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(!m.online){parts.push(`M${i+1}=ERROR`);anyErr=true;}else parts.push(`M${i+1}=${Math.round(m.pos)}`);}
+    let out='',first=true,chunked=false;for(const p of parts){if(!first)out+=',';first=false;out+=p;if(out.length>=CH){reply((anyErr?'WARN: ':'')+out+':MORE');chunked=true;out='';first=true;}}reply((anyErr?'WARN: ':'')+out+(chunked?':END':''));}
+  function handleFloat(which,args,all){const spec={V:['V',' rps',0.01,1000],ACC:['ACC',' rps/s',0.1,6553.5],DEC:['DEC',' rps/s',0.1,6553.5],HV:['HV',' rps',0.01,20],HVZ:['HVZ',' rps',0.01,20],HACC:['HACC',' rps/s',0.1,6553.5]}[which];const[cmd,unit,lo,hi]=spec;const{n,F}=parseValues(args,all);if(valErr(cmd,n,all))return;
+    const get=m=>({V:m.storedVel,ACC:m.acc,DEC:m.dec,HV:m.hv,HVZ:m.hvz??m.hv,HACC:m.hacc??m.acc})[which];
+    if(F.nq){if(F.nq!==F.n){reply(`ERR:${cmd} cannot mix values and ?`);return;}const parts=[];for(let i=0;i<S.count;i++)if(F.query[i])parts.push(`M${i+1}=${f2(get(S.m[i]))}`);chunk(parts,cmd+': ',unit);return;}
+    for(let i=0;i<S.count;i++){if(!F.active[i])continue;const v=which==='V'?Math.abs(F.f[i]):F.f[i];if(v<lo||v>hi){reply(`ERR:${cmd} range ${lo.toFixed(2)}..${hi.toFixed(1)}${unit} (M${i+1})`);return;}}
+    const parts=[];for(let i=0;i<S.count;i++){if(!F.active[i])continue;const m=S.m[i],v=F.f[i];switch(which){case'V':m.storedVel=v;if(m.jog&&all){m.vel=v;}break;case'ACC':m.acc=v;break;case'DEC':m.dec=v;break;case'HV':m.hv=v;break;case'HVZ':m.hvz=v;break;case'HACC':m.hacc=v;break;}parts.push(`M${i+1}=${f2(v)}`);}
+    if(all){reply(`${cmd}A: all motors = ${f2(F.f[0])}${unit}${which==='V'?' (BROADCAST)':''}`);}else chunk(parts,'Set '+cmd+': ',unit);}
+  function handleVS(args,all){const{n,sel}=parseSelection(args,all);if(selErr('VS',n))return;S.pending=null;const list=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(m.online){m.mode='VEL';m.homingArmed=false;m.moving=false;m.jog=true;m.vel=m.storedVel;m.halted=false;m.qstop=false;m.enabled=true;}list.push(i+1);}
+    if(n===S.count)reply('VS: velocity mode started (stop with B)');else reply(`VS: velocity mode started for M${list.join(',')} (stop with B)`);}
+  function handleBrake(type,args,all){if(type<0||type>3){reply('ERR:B type is B, B1, B2 or B3');return;}if(!all&&!args.trim().length)all=true;const{n,sel}=parseSelection(args,all);if(selErr('B',n))return;S.pending=null;const list=[];
+    for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];m.moving=false;m.jog=false;m.vel=0;if(type===0)m.halted=true;else{m.qstop=true;}list.push(i+1);}
+    const every=(n===S.count);const tgt=every?'all motors':'motor '+list.join(',');
+    if(type===1)reply('Deceleration brake applied to '+tgt);else if(type===2)reply('Fast brake applied to '+tgt);else if(type===3)reply('Immediate brake applied to '+tgt);else if(every)reply('All motors stopped with deceleration');else reply(`Motor ${list.join(',')} stopped with deceleration`);}
+  function handleLoosen(args,all){const{n,sel}=parseSelection(args,all);if(selErr('L',n))return;const list=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;S.m[i].enabled=false;S.m[i].moving=false;S.m[i].jog=false;list.push(i+1);}reply(n===S.count?'All motor brakes loosened':`Motor ${list.join(',')} brake loosened`);}
+  function handleBS(args,all){const{n,sel}=parseSelection(args,all);if(selErr('BS',n))return;let braked=0,freed=0,errors=0;const parts=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];const s=sw(m);if(s===null){parts.push(`M${i+1}:ERROR`);errors++;continue;}const be=(s&0x100)||!(s&0x4);const run=!!(s&0x200);parts.push(`M${i+1}:${be?'BRAKE':'FREE'}/${run?'RUN':'STOP'}`);if(be)braked++;else freed++;}
+    let sum=errors===n?'ERROR':(braked&&!freed)?'BRAKED':(freed&&!braked)?'FREE':'MIXED';chunk(parts,'BRAKE STATUS: ',' | SUMMARY: '+sum);}
+  function handleLS(args,all){const{n,sel}=parseSelection(args,all);if(selErr('LS',n))return;const parts=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];const s=sw(m);if(s===null){parts.push(`M${i+1}:ERROR`);continue;}const homed=m.mode==='HOM'?!!(s&0x1000):m.homed;const herr=m.mode==='HOM'?!!(s&0x2000):m.homeErr;parts.push(`M${i+1}:CW=${m.cw?1:0} CCW=${m.ccw?1:0} SW=${m.sw?1:0} HOMED=${herr?'ERR':homed?'1':m.homingArmed?'BUSY':'0'} MODE=${m.mode}`);}chunk(parts,'LIMITS: ');}
+  function handleZero(args,all){const{n,sel}=parseSelection(args,all);if(selErr('Z',n))return;rampDown(sel);const list=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(m.online){m.pos=0;m.target=0;m.moving=false;m.mode='POS';m.homingArmed=false;m.zeroSet=true;m.halted=false;}list.push(i+1);}reply(n===S.count?'All motors set to zero position':`Motor ${list.join(',')} set to zero position`);}
+  function handleZO(args,all){const{n,F}=parseValues(args,all);if(valErr('ZO',n,all))return;if(F.nq){reply('ERR:ZO takes values, not ? (read positions with P:?)');return;}rampDown(F.active);const parts=[];for(let i=0;i<S.count;i++){if(!F.active[i])continue;const m=S.m[i];if(m.online){m.pos=F.l[i];m.target=m.pos;m.moving=false;m.mode='POS';m.homingArmed=false;m.zeroSet=true;m.halted=false;}parts.push(`M${i+1}=${F.l[i]}`);}chunk(parts,'ZO: ',' (current position redefined)');}
+  function handleZS(args,all){const{n,sel}=parseSelection(args,all);if(selErr('ZS',n))return;let allSet=true;const parts=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(!m.online){parts.push(`M${i+1}:ERROR`);allSet=false;continue;}parts.push(`M${i+1}:${m.zeroSet?'ZERO':'NOT_SET'}(${Math.round(m.pos)})`);if(!m.zeroSet)allSet=false;}chunk(parts,'ZERO STATUS: ',allSet?' | ALL_ZERO_SET':' | ZERO_NOT_SET');}
+  function handleHO(args,all){const{n,F}=parseValues(args,all);if(valErr('HO',n,all))return;const parts=[];if(F.nq){if(F.nq!==F.n){reply('ERR:HO cannot mix values and ?');return;}for(let i=0;i<S.count;i++)if(F.query[i])parts.push(`M${i+1}=${S.m[i].ho}`);chunk(parts,'HO: ');return;}
+    for(let i=0;i<S.count;i++){if(!F.active[i])continue;S.m[i].ho=F.l[i];parts.push(`M${i+1}=${F.l[i]}`);}chunk(parts,'HO: ',' steps after sensor (used at next homing)');}
+  function handleHoming(method,args,all){if(method<1||method>12){reply('ERR:homing method H1..H12');return;}const{n,sel}=parseSelection(args,all);if(selErr('H',n))return;rampDown(sel);const list=[];const now=Date.now();for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(m.online){m.mode='HOM';m.homingArmed=true;m.homed=false;m.homeErr=false;m.homingT=now+2500+i*300;m.moving=true;m.target=m.pos-STEPS_PER_REV;m.moveVel=m.hv*STEPS_PER_REV;m.halted=false;m.qstop=false;m.enabled=true;m.homingMethod=method;}list.push(i+1);}
+    if(n===S.count)reply(`Homing method ${method} started for all motors`);else reply(`Homing method ${method} started for M${list.join(',')}`);}
+  function compact(i){const m=S.m[i];const s=sw(m);if(s===null)return`M${i+1}:ERROR`;const t1=(s&8)?'ERR':(s&4)?'RUN':'OFF';return`M${i+1}:${t1}|${(s&0x200)?'MOV':'STP'}|${(s&0x400)?'TR':'NR'}|POS=${Math.round(m.pos)}|VEL=${f1(m.vel)}`;}
+  function detail(i){const m=S.m[i];const s=sw(m);if(s===null)return`M${i+1}: NO REPLY (TIMEOUT)`;let o=`M${i+1} (ID ${i+1})\n  Status: ${hex(s)} (${stateName(s)})\n  Mode:   ${modeName(m.mode)}\n  Flags:  ${flagsString(s,m.mode)}\n  Bits:   ${bitsString(s)}\n  Pos:    ${Math.round(m.pos)}\n  Vel:    ${f1(m.vel)} rps`;if(s&8)o+=`\n  Error reg 0x1001 = ${hex(m.errReg)}`;return o;}
+  function human(i){const m=S.m[i];const s=sw(m);if(s===null)return`=== MOTOR ${i+1} === NOT RESPONDING (TIMEOUT) - check power, slave ID, RS485 wiring`;
+    let o=`=== MOTOR ${i+1} (Slave ID ${i+1}) Status ${hex(s)} ===\nState: ${stateName(s)}\nMotor: ${(s&4)?'ENABLED':'DISABLED'}${(s&0x200)?', RUNNING':', stopped'}${(s&0x100)?', HALT active':''}${(s&0x20)?'':', QUICK-STOP active'}\nMode: ${modeName(m.mode)}\nPosition: ${Math.round(m.pos)} steps (target ${(s&0x400)?'REACHED':'NOT reached'})\nVelocity: ${f1(m.vel)} rps\nHoming: `;
+    if(m.mode==='HOM'){o+=(s&0x2000)?'ERROR':(s&0x1000)?'complete':m.homingArmed?'IN PROGRESS':'not done';}else{o+=m.homeErr?'ERROR (last run failed)':m.homed?'homed':'not homed since boot';}
+    o+=` | Origin switch (SW): ${m.sw?'ON':'off'}\nLimits: CW ${m.cw?'*** ACTIVE ***':'clear'} | CCW ${m.ccw?'*** ACTIVE ***':'clear'}\n`;
+    if(s&0x2000)o+=(m.mode==='POS'?'OVER-POSITION ERROR (bit13)':m.mode==='VEL'?'MAX ACCELERATION reached (bit13)':'HOMING ERROR (bit13)')+'\n';
+    if(s&8)o+=`FAULT: over-current (0x1001=${hex(m.errReg)}) -> send R:M${i+1} to reset\n`;else o+='Health: OK, no faults\n';return o;}
+  function handleStatus(args,all){let selPart=args,fmt='RAW';if(all){fmt=args;selPart='';}else{const c=args.indexOf(':');if(c>=0){fmt=args.slice(c+1);selPart=args.slice(0,c);}}fmt=fmt.trim().toUpperCase()||'RAW';const{n,sel}=parseSelection(selPart,all);if(selErr('S',n))return;
+    const parts=[];const idx=[];for(let i=0;i<S.count;i++)if(sel[i])idx.push(i);
+    if(fmt==='RAW'){for(const i of idx){const s=sw(S.m[i]);parts.push(s===null?`M${i+1}=ERROR`:`M${i+1}=${hex(s)}`);}chunk(parts,'STATUS:');}
+    else if(fmt==='COMPACT'){for(const i of idx)parts.push(compact(i));chunk(parts,'');}
+    else if(fmt==='STATE'){for(const i of idx){const s=sw(S.m[i]);parts.push(`M${i+1}:${s===null?'ERROR':stateName(s)}`);}chunk(parts,'STATES:');}
+    else if(fmt==='BITS'||fmt==='FLAGS'){const lines=[];for(const i of idx){const s=sw(S.m[i]);lines.push(`M${i+1}:`+(s===null?'ERROR':fmt==='BITS'?bitsString(s):flagsString(s,S.m[i].mode)));}reply(lines.join('\n'));}
+    else if(fmt==='DETAIL'){multi(idx.map(detail));}
+    else reply('ERR:S formats RAW|COMPACT|DETAIL|STATE|BITS|FLAGS');}
+  function handleSD(args,all){const{n,sel}=parseSelection(args,all);if(selErr('SD',n))return;const idx=[];for(let i=0;i<S.count;i++)if(sel[i])idx.push(i);multi(idx.map(human));}
+  function handleDG(args,all){const{n,sel}=parseSelection(args,all);if(selErr('DG',n))return;const idx=[];for(let i=0;i<S.count;i++)if(sel[i])idx.push(i);multi(idx.map(i=>{const m=S.m[i];if(!m.online)return`DG M${i+1}: fmt6000=TIMEOUT st6041=TIMEOUT mode6061=TIMEOUT err1001=TIMEOUT\ntgt607A=TIMEOUT vel6081=TIMEOUT acc6083=TIMEOUT dec6084=TIMEOUT pos6064=TIMEOUT\nWRITE06=TIMEOUT WRITE10=TIMEOUT libScale=10`;const s=sw(m);const w32=v=>{v=Math.round(v)|0;return`${(v>>>16)&0xFFFF},${v&0xFFFF}`;};return`DG M${i+1}: fmt6000=0 st6041=${hex(s)} mode6061=${m.mode==='POS'?1:m.mode==='VEL'?3:6} err1001=${hex(m.errReg)}\ntgt607A=${w32(m.target)} vel6081=${w32(Math.round(Math.abs(m.mode==='VEL'?m.vel:m.storedVel)*10))} acc6083=${Math.round(m.acc*10)} dec6084=${Math.round(m.dec*10)} pos6064=${w32(m.pos)}\nWRITE06=OK WRITE10=OK libScale=10`;}));}
+  function handleInit(args,all){const{n,sel}=parseSelection(args,all);if(selErr('I',n))return;S.pending=null;let out='MOTOR INITIALIZATION:\n';let found=0,chunked=false;for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];out+=`Motor ${i+1} (Slave ID ${i+1}): `;if(m.online){found++;m.mode='POS';m.homingArmed=false;m.enabled=true;m.halted=false;m.qstop=false;const s=sw(m);out+=`DETECTED - Initialized in Position mode\n  Status: ${hex(s)} (${stateName(s)})\n  Position: ${Math.round(m.pos)}\n`;}else out+='NOT DETECTED (TIMEOUT)\n  Check: Power, Address, RS485 wiring\n';if(out.length>=CH){reply(out+':MORE');chunked=true;out='';}}
+    out+=`Total motors detected: ${found} of ${n}`;if(found===n)out+='\nSUCCESS: All expected motors detected and initialized!';reply(out+(chunked?':END':''));}
+  function handleReset(args,all){const{n,sel}=parseSelection(args,all);if(selErr('R',n))return;S.pending=null;const done=[];for(let i=0;i<S.count;i++){if(!sel[i])continue;const m=S.m[i];if(m.online){m.fault=false;m.errReg=0;m.homeErr=false;m.mode='POS';m.homingArmed=false;m.enabled=true;m.halted=false;m.qstop=false;m.moving=false;m.jog=false;m.vel=0;}done.push(`${i+1}${m.online?'':'(FAIL)'}`);}reply(n===S.count?'All motors reset complete':`Motor ${done.join(',')} reset complete`);}
+  function handleMC(args){const a=args.trim();if(!a.length||a.includes('?')){reply(`MC: ${S.count} motors (slave IDs 1..${S.count})`);return;}const n=parseInt(a);if(!(n>=1&&n<=32)){reply('ERR:MC range 1..32');return;}S.count=n;let online=0;for(let i=0;i<S.count;i++)if(S.m[i].online)online++;reply(`MC: ${S.count} motors, ${online} online (SAVE to keep across reboot)`);}
+  function snapshot(){return{count:S.count,crc:S.sketchCrc,m:S.m.slice(0,S.count).map(m=>({storedVel:m.storedVel,acc:m.acc,dec:m.dec,hv:m.hv,hvz:m.hvz,hacc:m.hacc,ho:m.ho}))};}
+  function handleSave(args){const a=args.trim().toUpperCase();if(a==='?'){if(!S.saved)reply('SAVE: nothing stored - sketch values in use');else if(S.saved.crc===S.sketchCrc)reply('SAVE: settings stored and applied at boot (SAVE:CLEAR to forget)');else reply('SAVE: settings stored but IGNORED - sketch was re-flashed with other values (LOAD applies them, SAVE re-arms)');return;}
+    if(a==='CLEAR'){S.saved=null;reply('SAVE: cleared - sketch values apply at next boot');return;}if(a.length){reply('ERR:SAVE use SAVE, SAVE:? or SAVE:CLEAR');return;}S.saved=snapshot();reply(`SAVE: ${S.count} motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC) - applied at every boot until the sketch is re-flashed with other values`);}
+  function handleLoad(){if(!S.saved){reply('ERR:LOAD nothing stored (or checksum failed)');return;}S.count=S.saved.count;S.saved.m.forEach((v,i)=>Object.assign(S.m[i],v));reply(`LOAD: ${S.count} motors loaded and applied`);}
+  // ---- dispatcher
+  function exec(line){out.length=0;let s=line.trim();if(!s.length)return[];const c=s.indexOf(':');let head=(c<0?s:s.slice(0,c)).trim().toUpperCase();let args=c<0?'':s.slice(c+1).trim();
+    if(head==='MC'){handleMC(args);return out;}if(head==='VER'){reply('JMCMotors 0.5.1');return out;}if(head==='PING'){reply('PONG');return out;}if(head==='SAVE'){handleSave(args);return out;}if(head==='LOAD'){handleLoad();return out;}
+    if(head==='X'){reply('System restart initiated...');setTimeout(()=>{for(let i=0;i<32;i++){const m=S.m[i];Object.assign(m,{storedVel:0.3,acc:0.5,dec:0.5,hv:0.3,hvz:null,hacc:null,ho:0,mode:'POS',homed:false,homingArmed:false,moving:false,jog:false,vel:0,halted:false,qstop:false,enabled:true});}S.count=6;S.sketchCrc=fingerprint();if(S.saved&&S.saved.crc===S.sketchCrc){S.count=S.saved.count;S.saved.m.forEach((v,i)=>Object.assign(S.m[i],v));}emit({k:'sys',s:'(controller rebooted'+(S.saved?(S.saved.crc===S.sketchCrc?', SAVEd settings applied':', SAVEd block ignored - sketch values changed'):'')+')'});emit({k:'ev',s:'Motor ready'});},900);return out;}
+    let all=false;if(head.length>=2&&head.endsWith('A')){const b=head.slice(0,-1);if(isMotorCommand(b)){head=b;all=true;}}
+    switch(head){case'P':handlePosition(args,true,all);break;case'PR':handlePosition(args,false,all);break;case'V':case'ACC':case'DEC':case'HV':case'HVZ':case'HACC':handleFloat(head,args,all);break;case'VS':handleVS(args,all);break;case'L':handleLoosen(args,all);break;case'BS':handleBS(args,all);break;case'Z':handleZero(args,all);break;case'ZO':handleZO(args,all);break;case'ZS':handleZS(args,all);break;case'HO':handleHO(args,all);break;case'S':handleStatus(args,all);break;case'SD':handleSD(args,all);break;case'LS':handleLS(args,all);break;case'DG':handleDG(args,all);break;case'I':handleInit(args,all);break;case'R':handleReset(args,all);break;case'B':handleBrake(0,args,all);break;
+      default:if(head[0]==='B'&&isMotorCommand(head))handleBrake(parseInt(head.slice(1)),args,all);else if(head[0]==='H'&&isMotorCommand(head))handleHoming(parseInt(head.slice(1)),args,all);else reply('ERR:unknown command '+head);}
+    return out;}
+  // ---- time
+  let last=Date.now();
+  function tick(){const now=Date.now();const dt=(now-last)/1000;last=now;
+    for(let i=0;i<S.count;i++){const m=S.m[i];
+      if(!m.online){if(m.offlineUntil&&now>=m.offlineUntil){m.online=true;m.offlineUntil=0;m.pos=0;m.target=0;m.moving=false;m.jog=false;m.vel=0;m.mode='POS';m.homed=false;m.homingArmed=false;m.homeErr=false;m.fault=false;m.errReg=0;const s=sw(m);emit({k:'ev',s:`EVENT:ONLINE:M${i+1} ST=${hex(s)} (re-initialised)`});m.lastSeenOnline=true;}else if(m.lastSeenOnline){m.lastSeenOnline=false;emit({k:'ev',s:`EVENT:OFFLINE:M${i+1}`});}continue;}
+      if(m.jog&&!m.halted&&!m.fault){m.pos+=m.vel*STEPS_PER_REV*dt;}
+      if(m.moving&&!m.fault){const dir=Math.sign(m.target-m.pos)||1;const step=m.moveVel*dt;if(Math.abs(m.target-m.pos)<=step){m.pos=m.target;m.moving=false;m.vel=0;}else{m.pos+=dir*step;m.vel=dir*m.moveVel/STEPS_PER_REV;}
+        if(m.mode==='HOM'&&m.homingArmed){if(!m.sw&&now>=m.homingT-900&&!m._swFired){m._swFired=true;m.sw=true;emit({k:'ev',s:`EVENT:ORIGIN:M${i+1}:ON POS=${Math.round(m.pos)} ST=${hex(sw(m))}`});}
+          if(now>=m.homingT){m.moving=false;m.vel=0;m.pos=m.ho;m.target=m.pos;m.homed=true;m.homingArmed=false;m._swFired=false;if(m.sw){m.sw=false;emit({k:'ev',s:`EVENT:ORIGIN:M${i+1}:OFF`});}emit({k:'ev',s:`EVENT:HOMED:M${i+1} POS=${Math.round(m.pos)} ST=${hex(sw(m))}`});}}}
+      // limits stop motion in that direction
+      if((m.cw&&(m.moving||m.jog)&&(m.vel>0))||(m.ccw&&(m.moving||m.jog)&&(m.vel<0))){m.moving=false;m.jog=false;m.vel=0;}
+    }
+    if(S.pending&&now>=S.pending.t){const p=S.pending;S.pending=null;for(let i=0;i<S.count;i++)S.m[i].halted=false;const r=exec((p.absolute?'P':'PR')+(p.all?'A':'')+':'+p.args);r.forEach(x=>emit(x));}
+  }
+  function press(i,what){const m=S.m[i];const mn='M'+(i+1);
+    if(what==='PWR'){if(!m.online&&m.offlineUntil){return;}m.online=false;m.offlineUntil=Date.now()+3500;m.moving=false;m.jog=false;return;}
+    if(!m.online)return;
+    if(what==='CW'){m.cw=!m.cw;if(m.cw){m.moving=false;m.jog=false;m.vel=0;emit({k:'ev',s:`EVENT:LIMIT:${mn}:CW POS=${Math.round(m.pos)} ST=${hex(sw(m))}`});}else emit({k:'ev',s:`EVENT:LIMIT:${mn}:CW_CLEARED`});}
+    if(what==='CCW'){m.ccw=!m.ccw;if(m.ccw){m.moving=false;m.jog=false;m.vel=0;emit({k:'ev',s:`EVENT:LIMIT:${mn}:CCW POS=${Math.round(m.pos)} ST=${hex(sw(m))}`});}else emit({k:'ev',s:`EVENT:LIMIT:${mn}:CCW_CLEARED`});}
+    if(what==='SW'){m.sw=!m.sw;if(m.sw)emit({k:'ev',s:`EVENT:ORIGIN:${mn}:ON POS=${Math.round(m.pos)} ST=${hex(sw(m))}`});else emit({k:'ev',s:`EVENT:ORIGIN:${mn}:OFF`});}
+    if(what==='FLT'){m.fault=!m.fault;if(m.fault){m.errReg=0x2;m.moving=false;m.jog=false;m.vel=0;emit({k:'ev',s:`EVENT:FAULT:${mn} ST=${hex(sw(m))} ERR=0x2 CURRENT`});}else{m.errReg=0;emit({k:'ev',s:`EVENT:FAULT_CLEARED:${mn}`});}}
+  }
+  init();
+  return{S,exec,tick,press,sw,hex,stateName,flagsString,bitsString,compact,onEmit:fn=>{emit=fn;}};
+})();
+
+/* ============================================================ terminal UI */
+const term=document.getElementById('terminal');const history=[];let hIdx=-1;
+function ts(){const d=new Date();return d.toTimeString().slice(0,8);}
+function line(k,s){const div=document.createElement('div');div.className=k;const pre=document.createElement('span');pre.className='t';pre.textContent=ts();div.appendChild(pre);const body=document.createElement('span');body.textContent=(k==='tx'?'→ ':k==='rx'?'← ':k==='ev'?'⚡ ':'')+s;div.appendChild(body);term.appendChild(div);term.scrollTop=term.scrollHeight;while(term.children.length>400)term.removeChild(term.firstChild);}
+Sim.onEmit(x=>{line(x.k==='er'?'er':x.k,x.s);drawDrives();});
+function send(cmd){if(!cmd.trim())return;line('tx',cmd);history.unshift(cmd);hIdx=-1;const r=Sim.exec(cmd);r.forEach(x=>line(x.s.startsWith('ERR:')?'er':'rx',x.s));drawDrives();}
+const cmdIn=document.getElementById('cmd');
+document.getElementById('send').onclick=()=>{send(cmdIn.value);cmdIn.value='';cmdIn.focus();};
+cmdIn.addEventListener('keydown',e=>{if(e.key==='Enter'){send(cmdIn.value);cmdIn.value='';}else if(e.key==='ArrowUp'){e.preventDefault();if(hIdx<history.length-1){hIdx++;cmdIn.value=history[hIdx];}}else if(e.key==='ArrowDown'){e.preventDefault();if(hIdx>0){hIdx--;cmdIn.value=history[hIdx];}else{hIdx=-1;cmdIn.value='';}}});
+document.getElementById('clear').onclick=()=>{term.innerHTML='';};
+['VER','IA','PA:?','P:4000,,12000','SA:COMPACT','V:1','VS:M1','B','H3:M1','LSA','SD:M1','HOA:500','SAVE','SAVE:?','X'].forEach(c=>{const b=document.createElement('button');b.className='btn small';b.textContent=c;b.onclick=()=>send(c);document.getElementById('shortcuts').appendChild(b);});
+setInterval(()=>{Sim.tick();drawDrives();},100);
+const drivesEl=document.getElementById('drives');
+function drawDrives(){const S=Sim.S;let html='';for(let i=0;i<S.count;i++){const m=S.m[i];const s=Sim.sw(m);const st=s===null?'OFFLINE':`${Math.round(m.pos)} st · ${m.mode} · ${(m.moving||m.jog)?'MOV':'STP'}${m.homed?' · homed':''}`;
+  html+=`<div class="mrow"><b>M${i+1}</b><div><div class="st" title="${s===null?'':Sim.hex(s)}">${st}</div><div class="sw">${['CW','CCW','SW','FLT','PWR'].map(w=>{const on=w==='CW'?m.cw:w==='CCW'?m.ccw:w==='SW'?m.sw:w==='FLT'?m.fault:(!m.online);return`<button class="${w==='FLT'?'fault':''} ${on?'on':''}" data-i="${i}" data-w="${w}">${w}</button>`;}).join('')}</div></div></div>`;}
+  if(drivesEl.innerHTML!==html)drivesEl.innerHTML=html;}
+drivesEl.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;Sim.press(+b.dataset.i,b.dataset.w);drawDrives();});
+drawDrives();
+line('sys','Simulator ready. 6 motors configured, motor 2 is not connected. Try IA.');
+setTimeout(()=>line('ev','Motor ready'),400);
+
+/* ============================================================ command reference */
+const listEl=document.getElementById('commandList');
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function render(){listEl.innerHTML='';for(const c of COMMANDS){const d=document.createElement('div');d.className='cmd';d.dataset.cat=c.cat;d.dataset.id=c.id;
+  let forms='';if(c.forms.ind)forms+=`<div class="form"><div class="k">individual (slots)</div><code>${esc(c.forms.ind)}</code></div>`;if(c.forms.names)forms+=`<div class="form"><div class="k">individual (names)</div><code>${esc(c.forms.names)}</code></div>`;if(c.forms.all)forms+=`<div class="form"><div class="k">${c.shape==='ctrl'?'forms':'all motors'}</div><code>${esc(c.forms.all)}</code></div>`;if(c.forms.read)forms+=`<div class="form"><div class="k">read</div><code>${esc(c.forms.read)}</code></div>`;
+  const ex=c.examples.map(e=>`<tr><td><code>${esc(e[0])}</code></td><td>${esc(e[1])}</td><td><pre style="margin:0;padding:4px 8px"><code>${esc(e[2])}</code></pre></td></tr>`).join('');
+  d.innerHTML=`<header><span class="name">${c.id}${c.allName&&c.shape!=='ctrl'?' / '+c.allName:''}</span><span class="title">${esc(c.title)}</span><span class="cat">${CAT_NAMES[c.cat]}</span></header>
+   <div class="body"><div class="forms">${forms}</div>
+   <div class="tbl-wrap"><table class="ex"><tr><th>Send</th><th>Effect</th><th>Reply</th></tr>${ex}</table></div>
+   ${c.triggers?`<div class="note"><b>What it triggers.</b> ${esc(c.triggers)}</div>`:''}
+   ${c.errors&&c.errors.length?`<div class="note err"><b>Errors.</b> ${c.errors.map(e=>'<code>'+esc(e)+'</code>').join(' · ')}</div>`:''}
+   <div class="row" style="margin-top:8px"><button class="btn small" data-try="${esc(c.examples[0][0])}">Try “${esc(c.examples[0][0])}” in the simulator</button><button class="btn small" data-build="${c.id}">Open in builder</button></div></div>`;
+  d.querySelector('header').onclick=()=>d.classList.toggle('open');listEl.appendChild(d);}}
+render();
+listEl.addEventListener('click',e=>{const t=e.target.closest('button');if(!t)return;if(t.dataset.try){location.hash='#console';send(t.dataset.try);}if(t.dataset.build){bCmd.value=t.dataset.build;bUpdate();location.hash='#builder';}});
+let activeCat='all';
+function filter(){const q=document.getElementById('q').value.trim().toLowerCase();for(const d of listEl.children){const c=COMMANDS.find(x=>x.id===d.dataset.id);const hay=(c.id+' '+c.title+' '+(c.allName||'')+' '+JSON.stringify(c.forms)+' '+c.examples.flat().join(' ')+' '+c.triggers+' '+(c.errors||[]).join(' ')).toLowerCase();const ok=(activeCat==='all'||c.cat===activeCat)&&(!q||hay.includes(q));d.style.display=ok?'':'none';if(q&&ok)d.classList.add('open');}}
+document.getElementById('q').addEventListener('input',filter);
+document.querySelectorAll('.cmd-tools .chip').forEach(ch=>ch.onclick=()=>{document.querySelectorAll('.cmd-tools .chip').forEach(x=>x.classList.remove('on'));ch.classList.add('on');activeCat=ch.dataset.cat;filter();});
+document.getElementById('expandAll').onclick=function(){const open=!listEl.querySelector('.cmd.open');for(const d of listEl.children)d.classList.toggle('open',open);this.textContent=open?'Collapse all':'Expand all';};
+
+/* ============================================================ builder */
+const bCmd=document.getElementById('b-cmd'),bTarget=document.getElementById('b-target'),bMode=document.getElementById('b-mode'),bOpt=document.getElementById('b-opt'),bOptWrap=document.getElementById('b-optwrap'),bOptLabel=document.getElementById('b-optlabel'),bMotors=document.getElementById('b-motors'),bOut=document.getElementById('b-out'),bReply=document.getElementById('b-reply'),bNotes=document.getElementById('b-notes'),bHint=document.getElementById('b-hint');
+for(const c of COMMANDS){const o=document.createElement('option');o.value=c.id;o.textContent=`${c.id} — ${c.title}`;bCmd.appendChild(o);}
+const bState={sel:{},val:{}};
+function bDefault(c){return c.unit==='steps'?(c.id==='PR'?'-500':c.id==='HO'?'1000':'1000'):c.unit==='rps'?(c.id==='HVZ'?'0.05':c.id==='HV'?'0.2':'0.5'):'0.3';}
+function bVals(c){return bState.val[c.id]||(bState.val[c.id]={});}
+function bVal(c,i){const v=bVals(c)[i];return(v===undefined||v==='')?bDefault(c):v;}
+function bBuildMotors(){const c=COMMANDS.find(x=>x.id===bCmd.value);bMotors.innerHTML='';const n=Sim.S.count;if(c.shape==='ctrl'){bMotors.innerHTML='<span class="muted small">controller command: no motor selection</span>';return;}
+  const all=bTarget.value==='all';const read=bMode.value==='read';
+  for(let i=1;i<=n;i++){const l=document.createElement('label');const cb=document.createElement('input');cb.type='checkbox';cb.checked=all?true:!!bState.sel[i];cb.disabled=all;cb.onchange=()=>{bState.sel[i]=cb.checked;bUpdate();};l.appendChild(cb);l.appendChild(document.createTextNode('M'+i));
+    if(c.shape==='values'&&!read){const inp=document.createElement('input');inp.type='number';inp.step='any';inp.value=bVal(c,i);inp.disabled=all&&i!==1;inp.oninput=()=>{bVals(c)[i]=inp.value;bUpdate();};l.appendChild(inp);}
+    bMotors.appendChild(l);}
+  bHint.textContent=all?(c.shape==='values'?'A form: the value of M1 applies to every motor.':'A form: every motor.'):'Tick the motors to address'+(c.shape==='values'&&!read?' and type their values.':'.');}
+function bUpdate(){const c=COMMANDS.find(x=>x.id===bCmd.value);const all=bTarget.value==='all',names=bTarget.value==='names',read=bMode.value==='read';
+  if(c.opt){bOptWrap.style.display='';bOptLabel.textContent=c.opt.label;if(bOpt.dataset.for!==c.id){bOpt.innerHTML='';for(const[v,t]of c.opt.values){const o=document.createElement('option');o.value=v;o.textContent=t;bOpt.appendChild(o);}bOpt.dataset.for=c.id;if(c.id==='H')bOpt.value='3';}}else bOptWrap.style.display='none';
+  bMode.disabled=!(c.shape==='values'&&c.id!=='ZO');if(bMode.disabled)bMode.value='set';
+  let head=c.id;const opt=c.opt?bOpt.value:'';if(c.id==='B'||c.id==='H')head=c.id+opt;
+  let pkt='';const n=Sim.S.count;const sel=[];for(let i=1;i<=n;i++)if(all||bState.sel[i])sel.push(i);
+  if(c.shape==='ctrl'){pkt=c.id==='MC'?'MC:?':c.id==='SAVE'?'SAVE':'VER';}
+  else if(all){pkt=head+'A';if(c.shape==='values')pkt+=':'+(read?'?':bVal(c,1));if(c.id==='S'&&opt)pkt+=':'+opt;}
+  else if(sel.length===0){pkt=head+':';}
+  else if(names){pkt=head+':'+sel.map(i=>c.shape==='values'?(read?'M'+i:'M'+i+'='+bVal(c,i)):'M'+i).join(',');if(c.id==='S'&&opt)pkt+=':'+opt;}
+  else{const last=sel[sel.length-1];const parts=[];for(let i=1;i<=last;i++){if(!sel.includes(i)){parts.push('');continue;}parts.push(c.shape==='values'?(read?'?':bVal(c,i)):'1');}pkt=head+':'+parts.join(',');if(c.id==='S'&&opt)pkt+=':'+opt;}
+  bOut.textContent=pkt;
+  // dry-run the reply on a snapshot of the simulator
+  const snap=JSON.stringify({count:Sim.S.count,m:Sim.S.m,saved:Sim.S.saved,pending:Sim.S.pending});const r=Sim.exec(pkt);const back=JSON.parse(snap);Sim.S.count=back.count;back.m.forEach((v,i)=>Object.assign(Sim.S.m[i],v));Sim.S.saved=back.saved;Sim.S.pending=back.pending;
+  bReply.textContent=r.length?r.map(x=>x.s).join('\n'):'(no immediate reply — OK follows when the move starts)';
+  bNotes.textContent=c.triggers||'';}
+bCmd.onchange=()=>{bBuildMotors();bUpdate();};bTarget.onchange=()=>{bBuildMotors();bUpdate();};bMode.onchange=()=>{bBuildMotors();bUpdate();};bOpt.onchange=bUpdate;
+document.getElementById('b-run').onclick=()=>{send(bOut.textContent);location.hash='#console';};
+document.getElementById('b-copy').onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(bOut.textContent);};
+bState.sel[1]=true;bState.sel[3]=true;bBuildMotors();bUpdate();
+
+/* ============================================================ decoder */
+const dHex=document.getElementById('d-hex'),dMode=document.getElementById('d-mode'),dBits=document.getElementById('d-bits'),dTable=document.getElementById('d-table');
+const BITDOC=[['READY','ready to initialise'],['INIT','initialisation complete'],['ENABLED','motor enabled (torque on)'],['FAULT','drive fault — read 0x1001, then R'],['WORKING','drive working normally'],['QSTOP','quick-stop NOT active (part of "Device enable")'],['INITSTATE','entering initialisation'],['WARN','warning'],['HALT','halted (after B)'],['RUN','motor running'],{POS:['REACHED','target reached'],VEL:['AT_SPEED','target speed reached'],HOM:['HOME_REACHED','homing position reached']},['SWORIGIN','origin switch (SW) input active'],{POS:['SETPOINT_OK','ready for a new set-point'],VEL:['VEL_ZERO','speed is 0'],HOM:['HOMED','homing complete']},{POS:['POSERR','over-position error'],VEL:['MAX_ACCEL','maximum acceleration'],HOM:['HOME_ERROR','homing error']},['CWLIM','CW limit input active'],['CCWLIM','CCW limit input active']];
+function decode(){let v=parseInt(dHex.value.trim().replace(/^0x/i,''),16);if(isNaN(v)){dBits.innerHTML='';return;}v&=0xFFFF;const mode=dMode.value;let html='';for(let b=15;b>=0;b--){const doc=Array.isArray(BITDOC[b])?BITDOC[b]:BITDOC[b][mode];html+=`<div class="bit ${(v>>b)&1?'on':''}"><b>${(v>>b)&1}</b>${b}<br><span class="muted">${doc[0]}</span></div>`;}dBits.innerHTML=html;
+  document.getElementById('d-state').textContent=Sim.stateName(v)+' ('+Sim.hex(v)+')';document.getElementById('d-flags').textContent=Sim.flagsString(v,mode);
+  const t1=(v&8)?'ERR':(v&4)?'RUN':'OFF';document.getElementById('d-compact').textContent=`${t1}|${(v&0x200)?'MOV':'STP'}|${(v&0x400)?'TR':'NR'}`;
+  let rows='<tr><th>Bit</th><th>Flag</th><th>Meaning when 1</th><th>Value</th></tr>';for(let b=0;b<16;b++){const doc=Array.isArray(BITDOC[b])?BITDOC[b]:BITDOC[b][mode];rows+=`<tr><td>${b}</td><td><code>${doc[0]}</code></td><td>${doc[1]}</td><td>${(v>>b)&1}</td></tr>`;}dTable.innerHTML=rows;}
+dHex.addEventListener('input',decode);dMode.addEventListener('change',decode);document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>{dHex.value=b.dataset.st;decode();});decode();
+</script>
+</body>
+</html>

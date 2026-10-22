@@ -8,3 +8,6 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local Claude Code session config (preview server etc.)
+.claude/
