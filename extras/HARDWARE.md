@@ -191,10 +191,15 @@ MotorSettings MOTOR[MOTOR_COUNT] = {
 
 Values in the sketch are **re-applied on every boot and whenever a drive
 comes back online**, so they survive power failures. Values changed at
-runtime with `V`, `AD`, `HV`, `HO`, `MC` last only until the next reboot —
-use them to find the right numbers, then copy them into the sketch. The
-table may have fewer rows than `MOTOR_COUNT`: motors without a row (or with
-a 0 in a row) use the `GLOBAL_*` values.
+runtime with `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `MC` last only
+until the next reboot — use them to find the right numbers, then either copy
+them into the sketch and re-flash, or send `SAVE` on a deployed unit to keep
+them without a USB cable. A saved block is ignored automatically once the
+sketch is re-flashed with different values, so the sketch is always the
+master copy. The table may have fewer rows than `MOTOR_COUNT`: motors
+without a row (or with a 0 in a column) use the `GLOBAL_*` values; the extra
+columns `homingZero`, `homingAccel` and `homingOff` map to `HVZ`, `HACC` and
+`HO`.
 
 ### Homing offset and drive-unit quirk (optional)
 
@@ -334,9 +339,10 @@ before the installation goes live.
 
 ### 7.8 Write it down
 
-Copy the final `V`, `AD`, `HV`, `HO` values into the sketch's per-motor table
-(or `setMotionDefaults` / `setMotorHomingOffset`) so they survive power loss,
-and re-flash.
+Copy the final `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO` values into the
+sketch's per-motor table so they are the master configuration, and re-flash.
+On a unit that is already deployed and awkward to reach, `SAVE` keeps the
+same values in EEPROM without a cable; `SAVE:?` confirms they are active.
 
 ---
 

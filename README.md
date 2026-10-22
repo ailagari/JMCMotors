@@ -11,10 +11,22 @@ V2.2 and the IHSS60-R/RC datasheet, and bench-tested on real hardware.
 
 ## 1. Install
 
-**Arduino IDE:** Sketch → Include Library → Add .ZIP Library… → select the
-downloaded ZIP of this repository. (Or copy the folder into
-`Documents/Arduino/libraries/`.) Requires the **CONTROLLINO** board package +
-library and the built-in **Ethernet** library.
+**Arduino IDE Library Manager:** Tools → Manage Libraries… → search
+**JMCMotors** → Install (the CONTROLLINO and Ethernet libraries are pulled in
+as dependencies). Also install the **CONTROLLINO** board package via Boards
+Manager.
+
+**From this repository:** Sketch → Include Library → Add .ZIP Library… →
+select the downloaded ZIP, or copy the folder into
+`Documents/Arduino/libraries/`.
+
+**Examples** (File → Examples → JMCMotors):
+
+| Example | What it is |
+|---|---|
+| `JMCMotors_6Motor` | the deployable controller: admin settings block, per-motor table, full UDP command system |
+| `JMCMotors_Minimal` | the same command system in six lines, library defaults |
+| `JMCMotors_DirectAPI` | moving a motor from C++ (`JMCBus` + `JMCMotor`), no Ethernet |
 
 ## 2. Set up the motors
 
@@ -199,10 +211,20 @@ Each Controllino needs its own static IP + MAC (edit the network block per
 board). There's no pairing/discovery layer, so double-check the addresses
 you set are correct and reachable before relying on replies.
 
-Settings sent over UDP (`V`, `HV`, `HO`, `MC`, `AD`) are lost on power
-failure; hardcode keepers in the sketch (the per-motor table, or
-`setMotorVelocity(...)` etc. directly) — they re-apply on every boot and
-whenever a drive comes back online.
+## How settings work
+
+1. **The admin configures the sketch** — the "EDIT ME" blocks in
+   `JMCMotors_6Motor` (network, motor count, speeds, ramps, homing) — and
+   flashes the Controllino. Those values are re-applied on every boot and
+   whenever a drive comes back online, so they survive power failures.
+2. **On a deployed unit, settings can be changed over UDP** (`V`, `ACC`,
+   `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `MC`). They last until the next reboot
+   unless the operator sends **`SAVE`**, which stores them in the
+   Controllino's EEPROM — no USB cable, no re-flash. `SAVE:?` shows what is
+   stored, `SAVE:CLEAR` forgets it, `LOAD` re-applies it.
+3. **The sketch always wins after a re-flash.** The saved block remembers
+   which sketch values it was made under and is ignored as soon as the admin
+   flashes different ones, so an old `SAVE` can never override a new flash.
 
 ## Changes in 0.5.0
 

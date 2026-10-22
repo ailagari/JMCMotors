@@ -349,13 +349,17 @@ class JMCController {
     void setMotorAccelDecel(uint8_t motorId, float accel_rps_s, float decel_rps_s);
 
     // ---- Saved settings (SAVE / LOAD commands, Controllino EEPROM) --------
-    // V, ACC, DEC, HV, HVZ, HACC, HO and the motor count. When a saved block
-    // exists it is applied in begin() AFTER the sketch values, so SAVE:CLEAR
-    // (or clearSaved()) returns the unit to what the sketch says.
-    bool saveSettings();        // write the live values; false = EEPROM too small
-    bool loadSettings();        // apply a saved block; false = none stored
+    // Policy: the sketch's values are the admin's configuration (edit, flash,
+    // done). SAVE is for changes made over UDP on a deployed unit, so nobody
+    // has to plug in a USB cable. The saved block carries a fingerprint of
+    // the sketch values it was saved under: begin() applies it only while
+    // that fingerprint still matches, so re-flashing the sketch with other
+    // values always wins. V, ACC, DEC, HV, HVZ, HACC, HO and the motor count.
+    bool saveSettings();               // write the live values; false = EEPROM too small
+    bool loadSettings(bool force = false); // apply the block; force = even if the sketch changed
     void clearSaved();
     bool hasSaved();
+    bool savedMatchesSketch();         // block exists and was saved under these sketch values
 
     // ---- Lifecycle ----------------------------------------------------------
     // Brings up RS-485 (Controllino mode), Ethernet/UDP and all motors.
@@ -449,6 +453,8 @@ class JMCController {
     float _decelSet[JMC_MAX_MOTORS];       // per-motor decel rps/s (NAN = default)
     long  _homingOffset[JMC_MAX_MOTORS];   // steps after sensor trigger (HO cmd)
     bool  _chunked = false;                // this reply already spilled into :MORE packets
+    uint16_t _sketchCrc = 0;               // fingerprint of the sketch values (begin())
+    uint16_t sketchFingerprint();
     void applyHomingParams(uint8_t i);     // write HV/HVZ/HACC/HO of motor i to its drive
 
     PendingMove _pending;

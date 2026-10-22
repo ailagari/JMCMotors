@@ -632,18 +632,27 @@ reboot only by `SAVE`; otherwise the sketch's `setMotorCount()` applies.
 
 ### `SAVE` · `LOAD` — settings in EEPROM
 
+**Policy.** The sketch's values are the admin's configuration: edit, flash,
+done. `SAVE` exists for changes made over UDP on a *deployed* unit, so nobody
+has to plug in a USB cable. The saved block carries a fingerprint of the
+sketch values it was saved under, and is applied at boot **only while that
+fingerprint still matches**. The moment the admin re-flashes the sketch with
+different values, the sketch wins again and the block is ignored (reported
+on the Serial Monitor and by `SAVE:?`). An old `SAVE` can therefore never
+override a new flash.
+
 | Send | Effect | Reply |
 |---|---|---|
-| `SAVE` | store `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO` of every motor and the motor count in the Controllino's EEPROM; applied automatically at every boot, **overriding the sketch values** | `SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC)` |
-| `SAVE:?` | is anything stored? | `SAVE: settings stored (applied at boot; SAVE:CLEAR to forget)` · `SAVE: nothing stored (sketch values in use)` |
-| `SAVE:CLEAR` | forget the stored block; the sketch values apply at the next boot | `SAVE: cleared - sketch values apply at next boot` |
-| `LOAD` | re-apply the stored block now (after experimenting at runtime) | `LOAD: 6 motors loaded and applied` |
+| `SAVE` | store `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO` of every motor and the motor count in the Controllino's EEPROM | `SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC) - applied at every boot until the sketch is re-flashed with other values` |
+| `SAVE:?` | is anything stored, and does it apply? | `SAVE: nothing stored - sketch values in use` · `SAVE: settings stored and applied at boot (SAVE:CLEAR to forget)` · `SAVE: settings stored but IGNORED - sketch was re-flashed with other values (LOAD applies them, SAVE re-arms)` |
+| `SAVE:CLEAR` | forget the stored block | `SAVE: cleared - sketch values apply at next boot` |
+| `LOAD` | apply the stored block now, even if the sketch changed since | `LOAD: 6 motors loaded and applied` |
 
-The block is CRC-protected; a corrupt or absent block is ignored at boot
-(`ERR:LOAD nothing stored (or checksum failed)` on `LOAD`). Flashing a new
-sketch does not erase EEPROM, so after changing the sketch's values send
-`SAVE:CLEAR` or `SAVE` again. **Errors**: `ERR:SAVE use SAVE, SAVE:? or
-SAVE:CLEAR` · `ERR:SAVE EEPROM too small`.
+The block is CRC-protected; a corrupt or absent block is ignored
+(`ERR:LOAD nothing stored (or checksum failed)` on `LOAD`). Re-flashing the
+same sketch values keeps a saved block active; re-flashing different ones
+sidelines it until the next `SAVE`. **Errors**: `ERR:SAVE use SAVE, SAVE:?
+or SAVE:CLEAR` · `ERR:SAVE EEPROM too small`.
 
 ### `VER` · `PING` · `X`
 

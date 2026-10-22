@@ -745,11 +745,17 @@ void JMCController::applyHomingParams(uint8_t i) {
 //   uint16 CRC-16 (Modbus polynomial) over header + motors
 // 32 motors need 6 + 32*28 + 2 = 904 bytes; the ATmega2560 has 4096.
 
+// Policy: the sketch's values are the admin's configuration. A SAVEd block is
+// for changes made over UDP on a deployed unit (no USB needed) and carries a
+// fingerprint of the sketch values that were in force when it was saved. At
+// boot the block is applied only while that fingerprint still matches - the
+// moment the admin re-flashes with different values, the sketch wins again
+// and the block is ignored (SAVE:? says so; LOAD applies it anyway).
 namespace {
-  struct SavedHeader { uint32_t magic; uint8_t version; uint8_t count; };
+  struct SavedHeader { uint32_t magic; uint8_t version; uint8_t count; uint16_t sketchCrc; };
   struct SavedMotor  { float vel, acc, dec, hv, hvz, hacc; long hoff; };
   const uint32_t SAVE_MAGIC   = 0x4A4D4335UL;   // 'JMC5'
-  const uint8_t  SAVE_VERSION = 1;
+  const uint8_t  SAVE_VERSION = 2;
   const int      SAVE_BASE    = 0;
 
   uint16_t crcStep(uint16_t crc, uint8_t b) {   // Modbus CRC-16, one byte
@@ -770,12 +776,34 @@ namespace {
   }
 }
 
+// CRC over everything the sketch configured (count, defaults, per-motor
+// values) - computed once in begin(), before any saved block is applied.
+uint16_t JMCController::sketchFingerprint() {
+  uint16_t crc = 0xFFFF;
+  const uint8_t* p;
+  auto feed = [&](const void* v, size_t n) {
+    p = (const uint8_t*)v;
+    for (size_t k = 0; k < n; k++) crc = crcStep(crc, p[k]);
+  };
+  feed(&_count, 1);
+  feed(&_defAccel, sizeof(float)); feed(&_defDecel, sizeof(float));
+  feed(&_defVel, sizeof(float));   feed(&_defHomingVel, sizeof(float));
+  feed(&_speedScale, sizeof(float));
+  for (uint8_t i = 0; i < _count; i++) {
+    feed(&_storedVel[i], sizeof(float));     feed(&_accelSet[i], sizeof(float));
+    feed(&_decelSet[i], sizeof(float));      feed(&_homingVel[i], sizeof(float));
+    feed(&_homingZeroVel[i], sizeof(float)); feed(&_homingAccel[i], sizeof(float));
+    feed(&_homingOffset[i], sizeof(long));
+  }
+  return crc;
+}
+
 bool JMCController::saveSettings() {
   int needed = (int)sizeof(SavedHeader) + _count * (int)sizeof(SavedMotor) + 2;
   if ((int)EEPROM.length() < SAVE_BASE + needed) return false;
   int addr = SAVE_BASE;
   uint16_t crc = 0xFFFF;
-  SavedHeader h = { SAVE_MAGIC, SAVE_VERSION, _count };
+  SavedHeader h = { SAVE_MAGIC, SAVE_VERSION, _count, _sketchCrc };
   crc = crcPut(addr, h, crc);
   for (uint8_t i = 0; i < _count; i++) {
     SavedMotor m = { _storedVel[i], _accelSet[i], _decelSet[i], _homingVel[i],
@@ -794,11 +822,19 @@ bool JMCController::hasSaved() {
          h.count >= 1 && h.count <= JMC_MAX_MOTORS;
 }
 
-bool JMCController::loadSettings() {
+// True when the stored block was saved under the sketch values now flashed.
+bool JMCController::savedMatchesSketch() {
+  SavedHeader h; int addr = SAVE_BASE;
+  crcGet(addr, h, 0xFFFF);
+  return hasSaved() && h.sketchCrc == _sketchCrc;
+}
+
+bool JMCController::loadSettings(bool force) {
   SavedHeader h; int addr = SAVE_BASE;
   uint16_t crc = crcGet(addr, h, 0xFFFF);
   if (h.magic != SAVE_MAGIC || h.version != SAVE_VERSION ||
       h.count < 1 || h.count > JMC_MAX_MOTORS) return false;
+  if (!force && h.sketchCrc != _sketchCrc) return false;   // re-flashed: sketch wins
   SavedMotor m[JMC_MAX_MOTORS];
   for (uint8_t i = 0; i < h.count; i++) crc = crcGet(addr, m[i], crc);
   uint16_t stored; crcGet(addr, stored, 0);
@@ -839,8 +875,17 @@ uint8_t JMCController::begin(uint32_t baud) {
   Ethernet.begin(_mac, _localIp);
   _udp.begin(_localPort);
 
-  // A SAVEd block overrides the sketch values (SAVE:CLEAR to go back).
-  if (loadSettings() && Serial) Serial.println(F("JMC settings loaded from EEPROM"));
+  // Sketch values are the admin's configuration. A block SAVEd over UDP on
+  // the deployed unit is applied on top - but only while the sketch values
+  // it was saved under are still the ones flashed (see sketchFingerprint).
+  _sketchCrc = sketchFingerprint();
+  if (Serial) {
+    if (loadSettings(false)) Serial.println(F("JMC: SAVEd settings applied (sketch unchanged since SAVE)"));
+    else if (hasSaved())     Serial.println(F("JMC: SAVEd block ignored - sketch values changed; using sketch (LOAD applies it)"));
+    else                     Serial.println(F("JMC: sketch settings in use (nothing SAVEd)"));
+  } else {
+    loadSettings(false);
+  }
 
   uint8_t found = 0;
   for (uint8_t i = 0; i < _count; i++) {
@@ -2100,18 +2145,19 @@ void JMCController::handleMotorCount(const String& args) {
 void JMCController::handleSave(const String& args) {
   String a = args; a.trim(); a.toUpperCase();
   if (a == "?") {
-    reply(hasSaved() ? F("SAVE: settings stored (applied at boot; SAVE:CLEAR to forget)")
-                     : F("SAVE: nothing stored (sketch values in use)"));
+    if (!hasSaved())              reply(F("SAVE: nothing stored - sketch values in use"));
+    else if (savedMatchesSketch()) reply(F("SAVE: settings stored and applied at boot (SAVE:CLEAR to forget)"));
+    else                          reply(F("SAVE: settings stored but IGNORED - sketch was re-flashed with other values (LOAD applies them, SAVE re-arms)"));
     return;
   }
   if (a == "CLEAR") { clearSaved(); reply(F("SAVE: cleared - sketch values apply at next boot")); return; }
   if (a.length())   { reply(F("ERR:SAVE use SAVE, SAVE:? or SAVE:CLEAR")); return; }
   if (!saveSettings()) { reply(F("ERR:SAVE EEPROM too small")); return; }
-  reply(String(F("SAVE: ")) + String(_count) + F(" motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC)"));
+  reply(String(F("SAVE: ")) + String(_count) + F(" motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC) - applied at every boot until the sketch is re-flashed with other values"));
 }
 
 void JMCController::handleLoad() {
-  if (!loadSettings()) { reply(F("ERR:LOAD nothing stored (or checksum failed)")); return; }
+  if (!loadSettings(true)) { reply(F("ERR:LOAD nothing stored (or checksum failed)")); return; }
   reply(String(F("LOAD: ")) + String(_count) + F(" motors loaded and applied"));
 }
 
