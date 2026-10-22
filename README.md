@@ -230,10 +230,16 @@ you set are correct and reachable before relying on replies.
 
 Cross-checked against the JMC Modbus-RTU manual V2.2:
 
-- The drive's halt code (0x605D) is now set to 1 at every init, so the controlled stop  is defined as "halt on the current deceleration" rather than relying on the drive's undocumented default.
-- Entering velocity mode now follows the manual's routine (halt, select mode, write speed, release), so a jog cannot start at the previous profile speed before  has written the jog speed, and all motors really start on the broadcast release.
-- A position move waits (up to 100 ms) for status bit 12, the manual's "can set new position" condition, before pulsing bit 4.
--  /  are capped at 20 rps, the drive's 1200 rpm homing ceiling.
+- The drive's halt code (0x605D) is now set to 1 at every init, so the
+  controlled stop `B` is defined as "halt on the current deceleration" rather
+  than relying on the drive's undocumented default.
+- Entering velocity mode now follows the manual's routine (halt, select mode,
+  write speed, release), so a jog cannot start at the previous profile speed
+  before `VS` has written the jog speed, and all motors really start on the
+  broadcast release.
+- A position move waits (up to 100 ms) for status bit 12, the manual's "can
+  set new position" condition, before pulsing bit 4.
+- `HV` / `HVZ` are capped at 20 rps, the drive's 1200 rpm homing ceiling.
 
 ## Changes in 0.5.0
 
