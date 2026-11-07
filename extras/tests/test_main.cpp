@@ -120,7 +120,7 @@ int main() {
   expect(jmc, "VER", "JMCMotors 0.6.0 (max 32 motors)");
 #endif
   expect(jmc, "PING", "PONG");
-  expect(jmc, "#17 PING", "#17 PONG");
+  expect(jmc, PICK("#17 PING", "PING"), PICK("#17 PONG", "PONG"));   // Uno: no reply tags
   expect(jmc, "p:?", "M1=0");
   expect(jmc, "FOO", "ERR:unknown command FOO");
   expectHas(jmc, "IA", "Total motors detected: 3 of 4");
@@ -233,6 +233,7 @@ int main() {
   runFor(jmc, 400);
   expect(jmc, "HV:2", "Set HV: M1=2.00 rps");
   expect(jmc, "HVZ:1", PICK("Set HVZ: M1=1.00 rps", "ERR:HVZ not available on this board"));
+  expect(jmc, "Z:M1", "Motor 1 set to zero position");   // back to position mode, so H1 sends the whole routine
   port.log.clear();
   expect(jmc, "H1:M1", "Homing method 1 started for M1");
   sawManual("01 06 60 60 00 06 17 D6", "H1: homing mode");
@@ -415,11 +416,11 @@ int main() {
   expect(jmc, "VS:M1", "VS: velocity mode started for M1 (stop with B)");
   runFor(jmc, 200);
   {
-    auto r = cmd(jmc, "#6 P:0");
+    auto r = cmd(jmc, PICK("#6 P:0", "P:0"));
     check(r.empty(), "P during a jog: no immediate reply", joined(r));
     pc.replies.clear();
     runFor(jmc, 1500);
-    check(joined(pc.replies) == "#6 OK", "deferred reply '#6 OK' once the move starts", joined(pc.replies));
+    check(joined(pc.replies) == PICK("#6 OK", "OK"), "deferred reply (tagged '#6 OK' where tags exist) once the move starts", joined(pc.replies));
     check(port.d[1].modeSwitchWhileSpinning == 0, "mode never switched while the shaft turned");
   }
   waitArrive(jmc, 6000);
@@ -466,7 +467,7 @@ int main() {
   runFor(jmc, 60);
   check(!eventHas("WATCHDOG"), "watchdog fed by PING does not trip", joined(pc.events));
   runFor(jmc, 150);
-  check(eventHas("EVENT:WATCHDOG:STOP no command for 100 ms - all motors stopped"), "watchdog trips after 100 ms", joined(pc.events));
+  check(eventHas(PICK("EVENT:WATCHDOG:STOP no command for 100 ms - all motors stopped", "EVENT:WATCHDOG:STOP")), "watchdog trips after 100 ms", joined(pc.events));
   check(port.d[1].velReg() == 0, "watchdog stopped the jog");
   expect(jmc, "WD:?", PICK("WD: 100 ms - all motors stop when no command arrives for that long", "WD: 100 ms"));
   expect(jmc, "WD:0", "WD: off");
@@ -564,7 +565,7 @@ int main() {
     check(feed("\r\n\r\n", 2).empty(), "serial: empty lines are ignored");
     std::string longLine(JMC_CMD_BUFFER + 20, 'x');
     check(feed(longLine + "\n", 1) == "ERR:command too long\r\n", "serial: over-long line refused", ser.out);
-    check(feed("#3 P:?\n", 1) == "#3 M1=0\r\n", "serial: next line after an over-long one works", ser.out);
+    check(feed(PICK("#3 P:?\n", "P:?\n"), 1) == PICK("#3 M1=0\r\n", "M1=0\r\n"), "serial: next line after an over-long one works", ser.out);
   }
 
 #ifndef SMALL_PROFILE

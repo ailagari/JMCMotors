@@ -139,6 +139,8 @@ practical one past a dozen motors (`P:,,,,,,,,,,,,,,,,1000` versus
   space): `#17 P:1000`. Every reply to that command (including deferred `OK`s
   and all `:MORE` packets) starts with the same `#17 `; events never carry a
   tag. Use it to match replies to requests when several are in flight.
+  Not on the Uno (`#17 P:1000` is refused there): send one command at a time
+  and read its reply.
 - A motor name above the configured count (`MC`) is refused:
   `ERR:P motor must be M1..M6`.
 - Slots beyond the configured motor count are ignored.
@@ -260,6 +262,14 @@ reason is one of the bus result names: `TIMEOUT`, `CRC`, `EXCEPTION`,
    limit 0..50000`) and nothing moves.
 5. `OK` means "launched", not "arrived". Watch `S:n:COMPACT` (`TR` = target
    reached) to know when the motor is there.
+6. **Streaming** (a PC or the [DMX bridge](dmx-bridge/README.md) sending
+   new targets many times a second): mode, enable and speed are written only
+   when they change, so a repeated `P` with the same `V` is three frames per
+   drive (0x607A, 0x3F, 0x2F); all motors = one 0x607A per drive plus the two
+   broadcast pulses. Everything is written again after `I`, `R`, a broadcast
+   stop, a jog, or when the monitor sees a drive disabled or faulted. At
+   115200 baud that is roughly 30 updates per second for 6 motors. Send the
+   next `P` after the `OK` of the previous one.
 
 **If the motors are in velocity mode (`VS`)**: changing a drive's mode
 register while the shaft turns stops it dead, so the controller first brakes
@@ -803,7 +813,8 @@ reboot only by `SAVE`; otherwise the sketch's `setMotorCount()` applies.
 
 When it expires: any queued move is cancelled, every online motor gets a
 controlled stop (`B`), and one event goes out:
-`EVENT:WATCHDOG:STOP no command for 500 ms - all motors stopped`. It re-arms
+`EVENT:WATCHDOG:STOP no command for 500 ms - all motors stopped` (on the Uno
+just `EVENT:WATCHDOG:STOP`). It re-arms
 with the next command. Any command feeds it, including `PING` and rejected
 ones; datagrams dropped by the sender filter do not. Range 50 … 65000 ms; set
 in the sketch with `setCommandWatchdog(ms)`; kept by `SAVE`.

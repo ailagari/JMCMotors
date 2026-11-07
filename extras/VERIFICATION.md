@@ -76,6 +76,7 @@ Four layers:
 | The broadcast start pulse was ~0.65 ms wide; the manual gives no processing time | **widened** to 2 ms |
 | A broadcast reaches every drive on the bus, also ones not configured (`MC`) | documented: `MC` must match the drives on the bus; the controller uses broadcast starts only when all configured motors move |
 | `R` / `I` briefly switch the motor off (power-up routine) | documented: send with the motor stopped |
+| Streaming many `P` per second rewrote mode, enable and speed every time (7 frames per drive) | **optimised**: a register already known to hold the value is skipped (3 frames per drive); the knowledge is dropped after `I` / `R`, any broadcast, a quick stop, a jog, and whenever the monitor sees a drive disabled or faulted, so the full sequence goes out again. Frame-check tests cover each case |
 | Homing "complete" fallback (at rest, bit 12 set, 1 s after start) could in theory report a run that never started | kept (needed when homing starts on the switch); bench check 6 |
 
 ## What the library guarantees on top of the manual
@@ -120,6 +121,11 @@ real timing. Before relying on a new installation:
 8. **Watchdog:** `WD:500`, stop sending → `EVENT:WATCHDOG:STOP`, motors stop.
 9. **Power-cycle a drive** while running → `EVENT:OFFLINE`, then `EVENT:ONLINE
    … (re-initialised)`; its position is 0 until re-homed.
+10. **Streaming** (with the [DMX bridge](dmx-bridge/README.md) or your own
+   PC program): send `P` targets 30–40 times a second for a minute while
+   moving a fader. The motor must follow without stalls, and the bridge's
+   error count must stay 0. Then power-cycle one drive mid-stream: after
+   `EVENT:ONLINE` it must follow again (the full start sequence is resent).
 
 Results from real installations (drive model, firmware, P-settings, which
 checks passed) are welcome as GitHub issues — they make the library more

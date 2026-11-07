@@ -910,6 +910,7 @@ void JMCController::handleCommand(char* line) {
 
   // optional "#<number> " tag, echoed at the start of every reply
   _tag[0] = '\0';
+#if JMC_FEATURE_EXTRAS                         // Uno: no reply tags, for space
   if (line[0] == '#') {
     size_t k = 1;
     while (k < 10 && isdigit((unsigned char)line[k])) k++;
@@ -919,6 +920,7 @@ void JMCController::handleCommand(char* line) {
       while (*line == ' ') line++;
     }
   }
+#endif
   _out.setTag(_tag);
 
   _lastCmdMs = millis();                         // feeds the command watchdog
@@ -1063,6 +1065,9 @@ void JMCController::serviceMonitor() {
   }
 
   c.failCnt = 0;
+  // Disabled or faulted on its own: forget what was written, so the next
+  // command sends the whole sequence again.
+  if (!(s & 0x0004) || (s & 0x0008)) mt->invalidateCache();
   if (!c.online) {
     // The drive (re)appeared - perhaps power-cycled: re-initialise fully.
     reinitMotor(chosen);
@@ -1169,6 +1174,7 @@ void JMCController::stWord(uint16_t s) {
 // fail[i] = that drive did not answer. Returns true if any failed.
 bool JMCController::stopMotors(uint8_t type, const bool* sel, bool every, bool* fail) {
   if (every) {
+    JMCMotor::forgetAll();                    // the broadcast changes every drive
     if (type) _bus.writeSingle(0, JMCReg::QUICKSTOP, type);
     _bus.writeSingle(0, JMCReg::CONTROL, type ? 0x000B : 0x010F);   // quick stop / halt
   }
@@ -1199,7 +1205,10 @@ void JMCController::serviceWatchdog() {
   cancelPendingMove();
   stopAll(0);
   _out.event();
-  _out.p(F("EVENT:WATCHDOG:STOP no command for ")); _out.n(_wdMs); _out.p(F(" ms - all motors stopped"));
+  _out.p(F("EVENT:WATCHDOG:STOP"));
+#if JMC_FEATURE_HINTS
+  _out.p(F(" no command for ")); _out.n(_wdMs); _out.p(F(" ms - all motors stopped"));
+#endif
   _out.send();
 }
 
@@ -1290,6 +1299,7 @@ void JMCController::launchPrepared(const bool* sel, uint8_t n, bool* fail) {
     _m[first]->broadcastEnableMovement();
     delay(2);                                 // bit 4 high for 2 ms: no reply to pace it
     _m[first]->broadcastStartMovement();
+    for (uint8_t i = 0; i < _count; i++) if (sel[i] && _m[i]) _m[i]->noteBroadcastStart();
     return;
   }
   for (uint8_t i = 0; i < _count; i++)
@@ -1437,7 +1447,7 @@ void JMCController::cmdSyncMove(const char* args, bool absolute, bool all) {
     return;
   }
 
-  long target[JMC_MAX_MOTORS];
+  long target[JMC_MAX_MOTORS] = { 0 };
   float dist[JMC_MAX_MOTORS];
   float dmax = 0;
   for (uint8_t i = 0; i < _count; i++) {

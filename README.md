@@ -161,6 +161,13 @@ subnet, and allow your UDP tool through Windows Firewall (inbound UDP is
 blocked on networks marked "Public"). Resetting the board while listening on
 `PC_PORT` should show `Motor ready`.
 
+**Resolume, MadMapper, lighting consoles (DMX):** the
+**[JMC DMX Bridge](extras/dmx-bridge/README.md)** runs on the same PC, listens
+for Art-Net and sACN, and turns each motor's DMX value (16-bit or 8-bit) into
+live position commands, with min/max mapping per motor, a STOP button and the
+watchdog as a safety net. The guide there walks through Resolume Arena step by
+step.
+
 ## 5. Command set
 
 One command per UDP packet, plain text, arguments after the colon. Units:
@@ -244,7 +251,7 @@ follows it.
 |---|---|
 | `SL:-1000/50000,,0/8000` · `SL:M2=OFF` · `SLA:0/100000` · `SL:?` | software position limits per motor (steps): `P`/`PR`/`PS` beyond them are refused, a jog (`VS`) stops at them with `EVENT:SOFTLIMIT` |
 | `WD:500` · `WD:0` · `WD:?` | communication watchdog: no command for 500 ms → every motor stops, `EVENT:WATCHDOG:STOP`. The PC sends `PING` (or anything) more often |
-| `#17 P:1000` | optional tag: any command may start with `#<number> `; every reply to it starts with `#17 `, so the PC can match replies to requests |
+| `#17 P:1000` | optional tag: any command may start with `#<number> `; every reply to it starts with `#17 `, so the PC can match replies to requests (not on Uno) |
 
 **What comes back.** `OK` for a launched move; a confirmation sentence for
 settings and stops; a data line for reads (`M1=10000,M3=200`); multi-line
@@ -298,7 +305,8 @@ same; what is left out is convenience:
 | `X` (soft restart) | the reset button |
 | `HVZ`, `HACC` as separate settings | they follow `HV` and `ACC` (the default anyway) |
 | automatic sign correction in `ZO` | the read-back check stays: a drive that disagrees is reported |
-| explanations after errors (`… - nothing started`, example hints), the `WD` / `I` hint sentences, fault names in `EVENT:FAULT` (the raw `ERR=0x..` code stays) | the `ERR:<CMD> …` start is the same; codes are listed in PROTOCOL.md |
+| `#<n>` reply tags | one command at a time: replies come back in command order |
+| explanations after errors (`… - nothing started`, example hints), the `WD` / `I` hint sentences, the explanation after `EVENT:WATCHDOG:STOP`, fault names in `EVENT:FAULT` (the raw `ERR=0x..` code stays) | the `ERR:<CMD> …` start is the same; codes are listed in PROTOCOL.md |
 | motors 7–32 | at most 6 motors |
 
 Those commands answer `ERR:<CMD> not available on this board`.
@@ -382,6 +390,11 @@ module.
 - `EVENT:SOFTLIMIT`, `EVENT:WATCHDOG`.
 - Strict number parsing; `ERR:command too long`.
 - No heap use and no `String` anywhere (motors live in fixed storage).
+- Streaming: registers that already hold the right value are not written
+  again, so a position update with an unchanged speed is 3 frames per drive
+  (all motors: one target frame each + one broadcast start).
+- [JMC DMX Bridge](extras/dmx-bridge/README.md): Art-Net / sACN from
+  Resolume, MadMapper or a console to live motor positions.
 
 **Behaviour changes**
 
@@ -491,6 +504,8 @@ the serial link, drives that go silent or reject frames mid-command, and a
 bash extras/tests/run_tests.sh
 ```
 
+The DMX bridge has its own test (Python, no hardware): `python extras/dmx-bridge/test_bridge.py`.
+
 ## Going deeper
 
 **Interactive reference:** <https://ailagari.github.io/JMCMotors/> — every
@@ -503,6 +518,7 @@ self-contained page.)
 | [extras/VERIFICATION.md](extras/VERIFICATION.md) | how the library is verified: every requirement of the JMC manual mapped to the code and a test, where the manual is unclear and what was chosen, and a bench checklist for new installations |
 | [extras/PROTOCOL.md](extras/PROTOCOL.md) | command grammar and the six command shapes, every command with triggers and replies, events, trigger/response matrix, status bits, error catalogue, recipes |
 | [extras/HARDWARE.md](extras/HARDWARE.md) | parts list, wiring for each board, drive parameters (P17/P19/P40–P43…), slave IDs, sketch configuration, first power-up, per-axis commissioning, 32-motor scaling, position limits, troubleshooting |
+| [extras/dmx-bridge/README.md](extras/dmx-bridge/README.md) | the DMX bridge: Art-Net / sACN to live motor positions; step-by-step Resolume Arena and MadMapper setup |
 | [src/JMCMotors.h](src/JMCMotors.h) | the three layers (bus / motor / controller) and the direct C++ API for advanced sketches |
 
 ## Author / license / status

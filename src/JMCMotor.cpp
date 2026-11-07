@@ -18,11 +18,23 @@ static const uint16_t CW_QUICKSTOP  = 0x000B; // quick stop: bit2 = 0, bit1 = 1 
                                               // edge (bit table p.5) can make the motor coast
 static const uint16_t CW_RESET      = 0x0080; // bit7: reset & clear error
 
+uint8_t JMCMotor::s_epoch = 0;
+
+// A broadcast since this motor last wrote anything: forget what it wrote.
+void JMCMotor::syncEpoch() {
+  if (_epoch != s_epoch) { invalidateCache(); _epoch = s_epoch; }
+}
+
+void JMCMotor::noteBroadcastStart() { syncEpoch(); _halted = false; _enabledSet = true; }
+
 JMCMotor::JMCMotor(JMCBus& bus, uint8_t slaveId) : _bus(bus), _slave(slaveId) {}
 
 JMCResult JMCMotor::ctrl(uint16_t value) {
+  syncEpoch();
   _last = _bus.writeSingle(_slave, JMCReg::CONTROL, value);
-  _halted = (value & 0x0100) && (value & 0x000F) == 0x000F;   // enabled + halt bit
+  bool ok = (_last == JMC_OK);
+  _halted = ok && (value & 0x0100) && (value & 0x000F) == 0x000F;      // enabled + halt bit
+  _enabledSet = ok && (value & 0x000F) == 0x000F && !(value & 0x0100);  // enabled, running free
   return _last;
 }
 
@@ -52,6 +64,12 @@ JMCResult JMCMotor::write32(uint8_t slave, uint16_t reg, int32_t value) {
   if (_formatMSBFirst) { words[0] = hi; words[1] = lo; }   // 0x6000 = 0
   else                 { words[0] = lo; words[1] = hi; }   // 0x6000 = 1
   _last = _bus.writeMultiple(slave, reg, words, 2);
+  if (slave == 0) forgetAll();                    // a broadcast changed every drive
+  else if (reg == JMCReg::TARGET_VEL) {
+    syncEpoch();
+    _velSet = (_last == JMC_OK);
+    _velReg = value;
+  }
   return _last;
 }
 
@@ -70,6 +88,9 @@ JMCResult JMCMotor::begin(float acceleration, float deceleration) {
   _accel = acceleration;
   _decel = deceleration;
   _velRunning = false;
+  syncEpoch();
+  invalidateCache();                              // assume nothing about the drive
+  _halted = false;
 
   uint16_t fmt = 0;                               // 32-bit word order
   if (_bus.readHolding(_slave, JMCReg::FORMAT, &fmt, 1) == JMC_OK)
@@ -123,18 +144,22 @@ JMCResult JMCMotor::setOperationMode(OperationMode mode) {
   // A mode write while the shaft turns in velocity mode stops it dead:
   // brake on the decel ramp first, then switch at standstill.
   if (mode != MODE_VELOCITY) stopVelocityMode();
+  syncEpoch();
+  // Already in this mode and enabled (or halted, see below): nothing to send.
+  if (_modeSet == mode && (_enabledSet || _halted)) { _last = JMC_OK; return _last; }
   // Halted (after B / a ramp-down): keep the halt while the new mode and
   // target are written. Releasing it first (0x000F) would let the drive
   // resume its previous position target for a moment (manual p.18: halt
   // 1->0 resumes motion); the next start pulse releases it instead.
   if (!_halted) enable();
   _last = _bus.writeSingle(_slave, JMCReg::MODE, (uint16_t)mode);
+  _modeSet = (_last == JMC_OK) ? (uint8_t)mode : 0;
   return _last;
 }
 
 JMCResult JMCMotor::loosenBrake() { return ctrl(CW_BRAKE_OPEN); }
 JMCResult JMCMotor::enable()      { return ctrl(CW_ENABLE); }
-JMCResult JMCMotor::alarmReset()  { return ctrl(CW_RESET); }
+JMCResult JMCMotor::alarmReset()  { invalidateCache(); return ctrl(CW_RESET); }
 
 JMCResult JMCMotor::moveToPosition(long steps, float velocity_rps, bool absolute) {
   JMCResult r = preparePositionMove(steps, velocity_rps, absolute);
@@ -154,7 +179,10 @@ JMCResult JMCMotor::preparePositionMove(long steps, float velocity_rps, bool abs
   if (setOperationMode(MODE_POSITION) != JMC_OK) return _last;   // dead drive: stop here
   restoreRamps();
   _moveBase = (absolute ? CW_ENABLE : (CW_ENABLE | CW_RELATIVE)) | CW_IMMEDIATE;
-  if (write32(_slave, JMCReg::TARGET_VEL, speedToReg(fabsf(velocity_rps))) != JMC_OK) return _last;
+  int32_t v = speedToReg(fabsf(velocity_rps));
+  syncEpoch();
+  if (!(_velSet && _velReg == v) &&                // same speed as last time: skip
+      write32(_slave, JMCReg::TARGET_VEL, v) != JMC_OK) return _last;
   return write32(_slave, JMCReg::TARGET_POS, (int32_t)steps);
 }
 
@@ -205,6 +233,7 @@ JMCResult JMCMotor::prepareVelocityMode(float velocity_rps) {
   if (ctrl(CW_HALT) != JMC_OK) return _last;
   restoreRamps();
   _last = _bus.writeSingle(_slave, JMCReg::MODE, (uint16_t)MODE_VELOCITY);
+  _modeSet = (_last == JMC_OK) ? (uint8_t)MODE_VELOCITY : 0;
   setTargetVelocity(velocity_rps);
   _moveBase = CW_ENABLE;                         // start = release halt
   _velRunning = true;
@@ -365,6 +394,7 @@ bool JMCMotor::hasFault()        { uint16_t s = getStatusWord(); return (_last =
 
 JMCResult JMCMotor::broadcastPrepareMove(long steps, float velocity_rps, bool absolute) {
   _bus.writeSingle(0, JMCReg::MODE, MODE_POSITION);
+  forgetAll();
   _moveBase = (absolute ? CW_ENABLE : (CW_ENABLE | CW_RELATIVE)) | CW_IMMEDIATE;
   write32(0, JMCReg::TARGET_VEL, speedToReg(fabsf(velocity_rps)));
   write32(0, JMCReg::TARGET_POS, (int32_t)steps);
@@ -386,6 +416,7 @@ JMCResult JMCMotor::broadcastStartMovement() {
 }
 
 JMCResult JMCMotor::broadcastStop() {
+  forgetAll();
   _last = _bus.writeSingle(0, JMCReg::CONTROL, CW_HALT);
   return _last;
 }

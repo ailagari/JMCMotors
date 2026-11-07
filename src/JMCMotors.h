@@ -280,6 +280,16 @@ class JMCMotor {
     int32_t  speedToReg(float rps) const;
     static uint16_t accelToReg(float rps_s);   // register = rps/s x 10
 
+    // Write-skipping: the motor remembers the mode, enable state and target
+    // speed it last wrote successfully and does not send them again while
+    // nothing can have changed them (a position update is then 3 frames
+    // instead of 5). invalidateCache() forgets all of it for this motor,
+    // forgetAll() for every motor (after any broadcast that changes state);
+    // noteBroadcastStart() records a broadcast start pulse.
+    void invalidateCache()     { _modeSet = 0; _enabledSet = false; _velSet = false; }
+    static void forgetAll()    { s_epoch++; }
+    void noteBroadcastStart();
+
     uint8_t   slaveId() const    { return _slave; }
     JMCResult lastResult() const { return _last; }
     JMCBus&   bus() const        { return _bus; }
@@ -294,6 +304,14 @@ class JMCMotor {
     bool      _formatMSBFirst = true;   // 0x6000 == 0 (JMC default)
     bool      _velRunning = false;      // velocity mode commanded, not yet stopped
     bool      _halted     = false;      // last control word: enabled with halt (bit 8)
+    // write-skipping state (valid while _epoch == s_epoch)
+    uint8_t   _modeSet    = 0;          // mode last written, 0 = unknown
+    bool      _enabledSet = false;      // last control word: enabled, no halt
+    bool      _velSet     = false;      // _velReg is what 0x6081 holds
+    int32_t   _velReg     = 0;
+    uint8_t   _epoch      = 0;
+    static uint8_t s_epoch;
+    void syncEpoch();
     bool      _rampsScaled = false;     // a synchronised move changed 0x6083/84
     uint16_t  _moveBase = 0x000F;
     uint16_t  _rampMs = 0;

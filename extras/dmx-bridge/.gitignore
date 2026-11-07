@@ -1,0 +1,4 @@
+# per-PC settings and Python caches
+jmc_dmx_bridge.json
+*.json.tmp
+__pycache__/

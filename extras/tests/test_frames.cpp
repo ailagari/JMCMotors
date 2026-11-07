@@ -120,12 +120,22 @@ int main() {
 
   // ---- position mode: forward / reverse, single motor (p.10-16) -----------------
   seq(jmc, "V:1", "Set V: M1=1.00 rps", {}, "");
-  seq(jmc, "P:4000", "OK", { W(1, 0x6060, 1), W32(1, 0x6081, 10), W32(1, 0x607A, 4000), W(1, 0x6040, 0x3F), W(1, 0x6040, 0x2F) }, "p.16");
+  // already in position mode and enabled after begin(): mode and enable are not sent again
+  seq(jmc, "P:4000", "OK", { W32(1, 0x6081, 10), W32(1, 0x607A, 4000), W(1, 0x6040, 0x3F), W(1, 0x6040, 0x2F) }, "p.16");
   runFor(jmc, 1200);
-  seq(jmc, "P:-4000", "OK", { W(1, 0x6060, 1), W32(1, 0x6081, 10), W32(1, 0x607A, -4000), W(1, 0x6040, 0x3F), W(1, 0x6040, 0x2F) }, "p.16 (negative INT32)");
+  seq(jmc, "P:-4000", "OK", { W32(1, 0x607A, -4000), W(1, 0x6040, 0x3F), W(1, 0x6040, 0x2F) }, "p.16 (negative INT32)");
+  {
+    // a repeated move with the same speed is exactly three frames to the drive
+    int n = 0; for (auto& f : port.log) if (f[0] == 1 && f[1] != 0x03) n++;
+    check(n == 3, "streaming: a position update with an unchanged speed = 3 frames (607A, 0x3F, 0x2F)", std::to_string(n));
+  }
   runFor(jmc, 2200);
   seq(jmc, "V:-1", "Set V: M1=-1.00 rps", {}, "");
-  seq(jmc, "P:0", "OK", { W32(1, 0x6081, 10), W32(1, 0x607A, 0) }, "speed magnitude for position moves");
+  seq(jmc, "P:0", "OK", { W32(1, 0x607A, 0) }, "speed magnitude for position moves");
+  {
+    bool vel = false; for (auto& f : port.log) if (f[0] == 1 && f[1] == 0x10 && (f[2] << 8 | f[3]) == 0x6081) vel = true;
+    check(!vel, "V:-1 has the same magnitude as V:1: speed register not re-sent");
+  }
   runFor(jmc, 1200);
   seq(jmc, "PR:-1500", "OK", { R(1, 0x6064), W32(1, 0x607A, -1500), W(1, 0x6040, 0x3F), W(1, 0x6040, 0x2F) }, "PR = actual position + delta, absolute");
   runFor(jmc, 600);
@@ -142,7 +152,7 @@ int main() {
   seq(jmc, "PRA:-500", "OK", { R(1, 0x6064), R(2, 0x6064), R(3, 0x6064), W(0, 0x6040, 0x3F), W(0, 0x6040, 0x2F) }, "PRA broadcast start");
   runFor(jmc, 600);
   seq(jmc, "V:1,,0.5", "Set V:", {}, "");
-  seq(jmc, "PS:4000,,0", "OK", { R(1, 0x6064), R(3, 0x6064), W(1, 0x6060, 1), W(1, 0x6083, 5), W(1, 0x6084, 4), W32(1, 0x6081, 10), W32(1, 0x607A, 4000) }, "PS scaled ramps + speed");
+  seq(jmc, "PS:4000,,0", "OK", { R(1, 0x6064), R(3, 0x6064), W(1, 0x6083, 5), W(1, 0x6084, 4), W32(1, 0x6081, 10), W32(1, 0x607A, 4000) }, "PS scaled ramps + speed");
   runFor(jmc, 2000);
 
   // ---- velocity mode, forward / reverse (p.18-19) ------------------------------------
@@ -207,9 +217,11 @@ int main() {
   // ---- homing, every method (p.20-27) ------------------------------------------------------
   for (int m = 1; m <= 12; m++) {
     std::string c = "H" + std::to_string(m) + ":M1";
-    seq(jmc, c, "Homing method " + std::to_string(m) + " started for M1",
-        { W(1, 0x609A, 50), W32(1, 0x6099, 20), W32(1, 0x609B, 10), W32(1, 0x607C, 300),
-          W(1, 0x6060, 6), W(1, 0x6098, m), W(1, 0x6040, 0x0F), W(1, 0x6040, 0x1F) }, "p.27 routine (parameters before the start bit)");
+    // the first run switches to homing mode; later runs find the drive still in it
+    std::vector<Exp> want = { W(1, 0x609A, 50), W32(1, 0x6099, 20), W32(1, 0x609B, 10), W32(1, 0x607C, 300) };
+    if (m == 1) want.push_back(W(1, 0x6060, 6));
+    want.push_back(W(1, 0x6098, m)); want.push_back(W(1, 0x6040, 0x0F)); want.push_back(W(1, 0x6040, 0x1F));
+    seq(jmc, c, "Homing method " + std::to_string(m) + " started for M1", want, "p.27 routine (parameters before the start bit)");
     pc.events.clear();
     runFor(jmc, 400);
     bool homed = false;
@@ -247,6 +259,35 @@ int main() {
   seq(jmc, "LS:M1", "LIMITS: M1:CW=", { R(1, 0x6041) }, "p.6-7 bits 11/14/15");
   seq(jmc, "SD:M1", "=== MOTOR 1", { R(1, 0x6041) }, "");
   seq(jmc, "DG:M1", "DG M1: fmt6000=0", { R(1, 0x6000), R(1, 0x6041), R(1, 0x6061), R(1, 0x1001), R(1, 0x607A), R(1, 0x6081), R(1, 0x6083), R(1, 0x6084), R(1, 0x6064) }, "p.4-9");
+
+  // ---- write-skipping: everything is sent again when the drive may have changed ---------------------
+  seq(jmc, "V:1,1,1", "Set V:", {}, "");
+  seq(jmc, "P:500", "OK", { W(1, 0x6060, 1), W32(1, 0x607A, 500) }, "leaving homing mode: mode written");
+  runFor(jmc, 300);
+  seq(jmc, "P:600", "OK", { W32(1, 0x607A, 600), W(1, 0x6040, 0x3F) }, "");
+  runFor(jmc, 300);
+  seq(jmc, "B1:M1", "Deceleration brake applied to motor 1", {}, "");
+  seq(jmc, "P:700", "OK", { W(1, 0x6040, 0x0F), W32(1, 0x607A, 700), W(1, 0x6040, 0x3F) }, "after a quick stop: enable sent again");
+  runFor(jmc, 300);
+  port.d[1].fault = true; port.d[1].errReg = 2; runFor(jmc, 100);
+  port.d[1].fault = false; port.d[1].errReg = 0; runFor(jmc, 100);
+  seq(jmc, "P:800", "OK", { W(1, 0x6040, 0x0F), W(1, 0x6060, 1), W32(1, 0x6081, 10), W32(1, 0x607A, 800) }, "after the monitor saw a fault: full sequence again");
+  runFor(jmc, 300);
+  seq(jmc, "VS:M1", "VS: velocity mode started for M1", {}, "");
+  runFor(jmc, 100);
+  seq(jmc, "B:M1", "Motor 1 stopped with deceleration", {}, "");
+  runFor(jmc, 100);
+  seq(jmc, "P:0", "OK", { W(1, 0x6060, 1), W32(1, 0x6081, 10), W32(1, 0x607A, 0) }, "after a jog: position mode and speed written again");
+  runFor(jmc, 1500);
+  seq(jmc, "PA:100", "OK", { W32(1, 0x607A, 100), W32(2, 0x607A, 100), W32(3, 0x607A, 100), W(0, 0x6040, 0x3F), W(0, 0x6040, 0x2F) }, "");
+  runFor(jmc, 300);
+  {
+    keepLog();
+    cmd(jmc, "PA:200");
+    int n = 0; for (auto& f : port.log) if (f[1] != 0x03) n++;
+    check(n == 5, "all three motors: 3 target frames + 2 broadcast pulses = 5 frames per update", std::to_string(n));
+  }
+  runFor(jmc, 300);
 
   // ---- the manual's general rules, over every frame of the run --------------------------------------
   keepLog();
