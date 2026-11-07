@@ -26,11 +26,30 @@ Resolume / MadMapper ──Art-Net or sACN──▶ JMC DMX Bridge ──UDP or 
 - **RS-485** between the controller and the drives: a TTL-to-**RS-485** module (MAX485 / MAX13487 type) on Arduino and ESP32. CONTROLLINO has it built in. A TTL-to-RS-232 converter will **not** talk to the drives, because the JMC "-RC" drives use RS-485. See [HARDWARE.md](../HARDWARE.md).
 - **No DMX shield is needed.** The DMX comes over the network into the bridge. A DMX shield only matters if you want a wired XLR DMX cable straight into the Arduino, which is a different setup.
 
-**Software on the PC**
+**Three pieces, one version number**
 
-1. Install **Python 3.8 or newer** from [python.org](https://www.python.org/downloads/). In the installer, tick **"Add python.exe to PATH"**.
-2. Copy the `dmx-bridge` folder anywhere you like.
-3. For an Uno over USB only, open a command prompt and run `python -m pip install pyserial`.
+| Piece | Where to get it |
+|---|---|
+| Arduino library (controller firmware) | Arduino IDE → **Library Manager** → search **JMCMotors** → Install. Then File → Examples → JMCMotors → `JMCMotors_Controller` |
+| JMC DMX Bridge app | **[GitHub Releases](https://github.com/ailagari/JMCMotors/releases/latest)** → download the zip for your computer |
+| Your show software | Resolume Arena, MadMapper, a lighting console, QLC+, TouchDesigner… anything that sends Art-Net or sACN |
+
+Use the app and library with the **same version number** (e.g. both 0.6.0). The bridge reads the controller's version when it starts and warns in its log if the firmware is too old.
+
+**Install the app (no Python needed)**
+
+| Computer | Download | Run |
+|---|---|---|
+| Windows 10 / 11 | `JMC-DMX-Bridge-<version>-windows-x64.zip` | unzip, double-click `JMC-DMX-Bridge.exe`. The app isn't code-signed, so SmartScreen may warn: click **More info → Run anyway** |
+| macOS (Apple Silicon) | `JMC-DMX-Bridge-<version>-macos-arm64.zip` | unzip, move `JMC DMX Bridge.app` to Applications. The first time, **right-click → Open** (it isn't notarised) |
+| Linux (x64) | `JMC-DMX-Bridge-<version>-linux-x64.zip` | unzip, `chmod +x JMC-DMX-Bridge`, then `./JMC-DMX-Bridge` |
+
+The app includes everything, including USB/COM-port support. **Settings** are saved in `jmc_dmx_bridge.json` next to the app (Windows / Linux, so a USB stick works as a portable setup) or in `~/Library/Application Support/JMC DMX Bridge` (macOS). Messages in headless mode go to `jmc_dmx_bridge.log` in the same place.
+
+<details><summary>Run from source instead (Intel Mac, other systems, developers)</summary>
+
+Install Python 3.8+ ([python.org](https://www.python.org/downloads/); on Windows tick "Add python.exe to PATH"). For the USB link, run `python -m pip install pyserial`. Then run `python jmc_dmx_bridge.py`, or double-click `start_bridge.bat` on Windows. To build the app yourself: `python -m pip install pyinstaller pyserial`, then `python build_app.py`. The result lands in `dist/`.
+</details>
 
 **Get the controller working first.** Before the bridge, send `P:1000` from the serial monitor or the [interactive reference](https://ailagari.github.io/JMCMotors/) and see the motor move. Set soft limits (`SL`) and home or zero (`H` / `Z`) every axis. The bridge sends **absolute** positions, so step 0 must be where you expect it.
 
@@ -55,9 +74,9 @@ For an **Uno over USB**, use `PC_LINK LINK_USB`. In the bridge, pick **USB / COM
 
 ## 3. Start the bridge
 
-Double-click **`start_bridge.bat`**, or run `python jmc_dmx_bridge.py`.
+Open **JMC DMX Bridge** (or, from source, `start_bridge.bat` / `python jmc_dmx_bridge.py`).
 
-> **Windows Firewall:** the first time, Windows asks whether Python may use the network. Tick **Private networks** and click **Allow**. If you miss it, no DMX and no controller replies get through. To fix it, go to Windows Security > Firewall > "Allow an app through firewall" and tick Python.
+> **Windows Firewall:** the first time, Windows asks whether JMC-DMX-Bridge (or Python, from source) may use the network. Tick **Private networks** and click **Allow**. If you miss it, no DMX and no controller replies get through. To fix it, go to Windows Security > Firewall > "Allow an app through firewall" and tick it. macOS asks the same ("accept incoming network connections"): click **Allow**.
 
 Fill in the window:
 
@@ -163,7 +182,7 @@ Menu names vary between versions; the idea is the same everywhere:
 
 Settings are saved to `jmc_dmx_bridge.json` next to the program. **Open settings…** loads another file, so you can keep one file per show.
 
-**Without the window** (a show PC, a service): run `python jmc_dmx_bridge.py --headless`. The first run writes a default `jmc_dmx_bridge.json`; edit it, then run again. Use `--config show2.json` for another file.
+**Without the window** (a show PC, a service): run `JMC-DMX-Bridge.exe --headless` (or `python jmc_dmx_bridge.py --headless`). The first run writes a default `jmc_dmx_bridge.json`; edit it, then run again. Use `--config show2.json` for another file, and `--version` to show the version.
 
 ---
 

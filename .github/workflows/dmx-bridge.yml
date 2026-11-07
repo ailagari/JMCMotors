@@ -1,0 +1,106 @@
+# Builds the JMC DMX Bridge app for Windows, macOS and Linux.
+#
+# - Every push / pull request that touches the bridge: test + build (the apps
+#   are downloadable from the run's "Artifacts" for 30 days).
+# - A version tag (v0.6.0, ...): the same, then the three zips are attached to
+#   the GitHub Release of that tag. The same tag publishes the library to the
+#   Arduino Library Manager, so library and app always share a version number.
+name: DMX bridge app
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths: ["extras/dmx-bridge/**", ".github/workflows/dmx-bridge.yml", "library.properties"]
+  pull_request:
+    paths: ["extras/dmx-bridge/**", ".github/workflows/dmx-bridge.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]   # ubuntu-22.04: runs on older Linux too
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux - Tk libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tk-dev
+
+      - name: Tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pyserial
+          python -c "import tkinter; print('tk', tkinter.TkVersion)"
+
+      - name: Versions match (library.properties, bridge, tag)
+        run: |
+          lib=$(grep '^version=' library.properties | cut -d= -f2 | tr -d '\r')
+          app=$(cd extras/dmx-bridge && python -c "import jmc_dmx_bridge as j; print(j.VERSION)")
+          echo "library $lib, bridge $app"
+          test "$lib" = "$app" || { echo "::error::library.properties ($lib) and the bridge VERSION ($app) differ"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test "${GITHUB_REF_NAME#v}" = "$lib" || { echo "::error::tag $GITHUB_REF_NAME does not match version $lib"; exit 1; }
+          fi
+
+      - name: Test
+        run: python extras/dmx-bridge/test_bridge.py
+
+      - name: Build
+        run: python extras/dmx-bridge/build_app.py
+
+      - name: Smoke test the built app
+        run: |
+          cd extras/dmx-bridge/dist
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            "JMC DMX Bridge.app/Contents/MacOS/JMC DMX Bridge" --version
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            ./JMC-DMX-Bridge.exe --version
+          else
+            ./JMC-DMX-Bridge --version
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JMC-DMX-Bridge-${{ runner.os }}
+          path: extras/dmx-bridge/dist/*.zip
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: zips
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: zips/*.zip
+          fail_on_unmatched_files: true
+          body: |
+            **JMCMotors ${{ github.ref_name }}**
+
+            - **Arduino library:** Arduino IDE → Library Manager → search "JMCMotors" (this version appears there within a day).
+            - **JMC DMX Bridge app** (Art-Net / sACN from Resolume, MadMapper, consoles → live motor positions): download the zip for your computer below, unzip, run.
+              - Windows: `JMC-DMX-Bridge.exe`. If SmartScreen appears: *More info → Run anyway*.
+              - macOS (Apple Silicon): `JMC DMX Bridge.app`. First start: right-click → *Open*.
+              - Linux: `chmod +x JMC-DMX-Bridge && ./JMC-DMX-Bridge`.
+            - Guide (also inside each zip as Guide.md): https://github.com/ailagari/JMCMotors/blob/main/extras/dmx-bridge/README.md

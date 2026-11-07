@@ -8,6 +8,9 @@ value (coarse + fine channel): the value is mapped to a step position and
 sent to the JMCMotors controller (CONTROLLINO / ESP32 / Mega over UDP, or an
 Uno over a USB COM port) as position commands.
 
+Ready-made apps (Windows .exe, macOS .app, Linux) are on the GitHub Releases
+page, built from this file - no Python needed. From source:
+
     python jmc_dmx_bridge.py                       settings window
     python jmc_dmx_bridge.py --headless            no window, settings file only
     python jmc_dmx_bridge.py --config other.json   another settings file
@@ -31,10 +34,41 @@ import sys
 import threading
 import time
 
-VERSION = "1.0.0"
+VERSION = "0.6.0"            # released together with the JMCMotors library of the same version
+MIN_FIRMWARE = (0, 6, 0)     # oldest controller firmware the bridge works with (MC:?, WD, PING)
 ARTNET_PORT = 6454
 SACN_PORT = 5568
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jmc_dmx_bridge.json")
+FROZEN = getattr(sys, "frozen", False)      # running as the packaged app (.exe / .app)
+
+
+def settings_dir():
+    """Where the settings file lives.
+    From source: next to this file. Packaged on Windows / Linux: next to the
+    app if that folder is writable (a portable folder), otherwise the user's
+    home. Packaged on macOS: ~/Library/Application Support/JMC DMX Bridge."""
+    if not FROZEN:
+        return os.path.dirname(os.path.abspath(__file__))
+    if sys.platform == "darwin":
+        d = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "JMC DMX Bridge")
+    else:
+        d = os.path.dirname(os.path.abspath(sys.executable))
+        if not os.access(d, os.W_OK):
+            d = os.path.join(os.path.expanduser("~"), "JMC DMX Bridge")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+DEFAULT_CONFIG = os.path.join(settings_dir(), "jmc_dmx_bridge.json")
+
+
+def parse_version(text):
+    """'JMCMotors 0.6.0 (max 32 motors)' -> (0, 6, 0), or None."""
+    try:
+        if not text.startswith("JMCMotors "):
+            return None
+        return tuple(int(x) for x in text.split()[1].split(".")[:3])
+    except (IndexError, ValueError):
+        return None
 
 
 # --------------------------------------------------------------------------- settings
@@ -460,6 +494,13 @@ class Bridge:
         else:
             self.version = reply
             self.log("Controller: " + reply)
+            fw = parse_version(reply)
+            if fw is None:
+                self.log("WARNING: the device on that address did not answer like a JMCMotors controller")
+            elif fw < MIN_FIRMWARE:
+                self.log("WARNING: controller firmware %s is older than %s - update the JMCMotors library "
+                         "(Arduino Library Manager) and upload the sketch again" %
+                         (".".join(map(str, fw)), ".".join(map(str, MIN_FIRMWARE))))
         reply = self._command("MC:?", timeout=1.0)
         if reply and reply.startswith("MC:"):
             try:
@@ -558,6 +599,11 @@ def run_gui(path):
     state = {"bridge": None, "path": path}
     root = tk.Tk()
     root.title("JMC DMX Bridge %s" % VERSION)
+    try:                                   # window / taskbar icon (Windows)
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        root.iconbitmap(os.path.join(base, "icon.ico"))
+    except Exception:
+        pass
     root.minsize(980, 640)
 
     def var(value):
@@ -584,7 +630,12 @@ def run_gui(path):
         ttk.Entry(box, textvariable=v[key], width=16).grid(row=r, column=1, sticky="w")
     ttk.Label(box, text="COM port / baud").grid(row=4, column=0, sticky="w")
     f = ttk.Frame(box); f.grid(row=4, column=1, sticky="w")
-    ttk.Entry(f, textvariable=v["com_port"], width=8).pack(side="left")
+    try:                                   # offer the serial ports that exist (pyserial)
+        from serial.tools import list_ports
+        ports = sorted(p.device for p in list_ports.comports())
+    except Exception:
+        ports = []
+    ttk.Combobox(f, textvariable=v["com_port"], values=ports, width=12).pack(side="left")
     ttk.Entry(f, textvariable=v["baud"], width=7).pack(side="left", padx=4)
 
     box = ttk.LabelFrame(top, text="DMX input", padding=6)
@@ -865,9 +916,12 @@ def run_headless(path):
 
 
 if __name__ == "__main__":
+    if sys.stdout is None:          # packaged app without a console: write messages to a log file
+        sys.stdout = sys.stderr = open(os.path.join(settings_dir(), "jmc_dmx_bridge.log"), "a", buffering=1)
     ap = argparse.ArgumentParser(description="Art-Net / sACN to JMC motors")
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="settings file (JSON)")
     ap.add_argument("--headless", action="store_true", help="run without the settings window")
+    ap.add_argument("--version", action="version", version="JMC DMX Bridge " + VERSION)
     a = ap.parse_args()
     if a.headless:
         run_headless(a.config)

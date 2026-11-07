@@ -2,3 +2,6 @@
 jmc_dmx_bridge.json
 *.json.tmp
 __pycache__/
+build/
+dist/
+*.spec

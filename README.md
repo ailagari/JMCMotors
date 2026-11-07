@@ -165,8 +165,10 @@ blocked on networks marked "Public"). Resetting the board while listening on
 **[JMC DMX Bridge](extras/dmx-bridge/README.md)** runs on the same PC, listens
 for Art-Net and sACN, and turns each motor's DMX value (16-bit or 8-bit) into
 live position commands, with min/max mapping per motor, a STOP button and the
-watchdog as a safety net. The guide there walks through Resolume Arena step by
-step.
+watchdog as a safety net. Ready-to-run apps for **Windows (.exe), macOS and
+Linux** are on the [Releases page](https://github.com/ailagari/JMCMotors/releases/latest),
+with the same version number as the library. The guide walks through Resolume
+Arena step by step.
 
 ## 5. Command set
 

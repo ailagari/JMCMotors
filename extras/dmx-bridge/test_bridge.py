@@ -119,6 +119,13 @@ def unit_tests():
     check(loaded["controller"]["ip"] == "10.0.0.5" and loaded["controller"]["port"] == 8001,
           "settings file merges into defaults")
 
+    check(jb.parse_version("JMCMotors 0.6.0 (max 32 motors)") == (0, 6, 0), "firmware version parsed")
+    check(jb.parse_version("JMCMotors 0.5.1") < jb.MIN_FIRMWARE, "older firmware detected")
+    check(jb.parse_version("hello") is None, "a device that is not a JMCMotors controller")
+    lib = open(jb.os.path.join(jb.os.path.dirname(jb.os.path.abspath(jb.__file__)), "..", "..",
+                               "library.properties"), encoding="utf-8").read()
+    check("version=%s\n" % jb.VERSION in lib, "bridge version = library version (released together)", jb.VERSION)
+
 
 # --------------------------------------------------------------------------- 2. simulated controller
 class FakeController:
