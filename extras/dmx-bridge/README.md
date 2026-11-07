@@ -12,6 +12,7 @@ Resolume / MadMapper ──Art-Net or sACN──▶ JMC DMX Bridge ──UDP or 
 ```
 
 - **Inputs:** Art-Net (port 6454) and sACN / E1.31 (port 5568, unicast or multicast).
+- **Several controllers:** one per IP (or COM port), **up to 32 motors each**, all from one window. Each controller streams on its own, so a slow bus never holds up the others.
 - **Per motor:** universe, channel, **16-bit** (channel + next channel, 0–65535) or **8-bit** (one channel, 0–255), DMX min/max, step min/max, speed, ramp.
 - **Safety:** STOP MOTORS button (or Esc); the motors stay stopped until you press Resume. If the bridge or PC dies, the controller's watchdog stops every motor. If DMX stops arriving, the motors hold their position.
 - **Smooth:** sends only the newest value, at most 40 updates/s (adjustable). Optional smoothing turns 8-bit staircases into glides.
@@ -80,12 +81,17 @@ Open **JMC DMX Bridge** (or, from source, `start_bridge.bat` / `python jmc_dmx_b
 
 Fill in the window, top to bottom:
 
-1. **Controller:** pick Network (UDP). Enter the controller's IP (`BOARD_IP_ADDR`), Controller port `8001` and Reply port `8000`.
-2. **DMX input:** tick Art-Net, sACN or both. Leave Listen on IP as `0.0.0.0`.
-3. **Motors:** one row per motor. **Motor** is the drive's number on the controller (M1, M2…). Set its DMX address and range (section 6 explains each column).
-4. Click **Save settings**, then **Start**.
+1. **DMX input:** tick Art-Net, sACN or both. Leave Listen on IP as `0.0.0.0`.
+2. **Replies:** the reply port is the sketch's `PC_UDP_PORT` (`8000`). It is one port for every controller.
+3. **Controllers:** one panel per controller. Name it (e.g. "Stage left"), pick **Network**, and enter its IP (`BOARD_IP_ADDR`) and port (`8001`). For an Uno, pick **USB / COM** and choose its port. **+ Add controller** adds the next one; it picks the next IP and the next free universe for you.
+4. **Motors:** one row per motor, **up to 32 per controller**. **Motor** is the drive's number on that controller (M1, M2…). **+ Add motor**, **+ Add 8** and **Fill to 32** continue the numbering and the channels. They move to the next universe when one is full, so 32 motors in 16-bit mode use channels 1–63 of one universe. Section 6 explains each column.
+5. Click **Save settings**, then **Start**.
 
-The status bar should show `JMCMotors 0.6.0 … | motors on controller: N`. If it says *controller not answering*, see Troubleshooting.
+The header should show **Streaming**, and each controller panel shows its firmware, its motor count and **Streaming**. If a panel says *Not answering*, see Troubleshooting.
+
+**Several controllers:** in every controller's sketch, set its own `BOARD_IP_ADDR`, the same `PC_IP_ADDR` (this PC) and the same `PC_UDP_PORT`. The bridge sorts their replies by sender. Each controller runs its own RS-485 bus with its own drive IDs 1–32, so two controllers can both have an M1.
+
+**The window adapts to its size.** Wide, each controller's motors are a table. Narrower (half a screen, a tablet), each motor becomes a card. On a phone-width window, one card per row. The fold arrow ▾ on a controller, or **Collapse all**, hides controllers you aren't working on.
 
 ---
 
@@ -174,7 +180,7 @@ Menu names vary between versions; the idea is the same everywhere:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Max updates / s | 40 | the most position commands per second. With 6 motors at 115200 baud the bus manages about 30 |
+| Max updates / s | 40 | the most position commands per second, per controller. The RS-485 bus sets the real limit; each controller panel shows an estimate: about 30/s with 6 motors and about 11/s with 32 motors at 115200 baud |
 | Deadband (steps) | 2 | smaller changes are not sent, which filters noise |
 | Smoothing ms | 0 | glide toward each new value; 100–200 for 8-bit sources, 0 for 16-bit |
 | Watchdog ms | 1000 | the controller stops every motor if the bridge goes quiet this long; the bridge sends `PING` to keep it alive. 0 = off |
@@ -188,7 +194,7 @@ Menu names vary between versions; the idea is the same everywhere:
 
 ## 7. How it moves the motors
 
-- Each update is one command, for example `P:M1=1200,M2=-300`. The bridge waits for the controller's `OK` before sending the next one, so commands never pile up and the newest value always wins.
+- Each update is one command per controller, for example `P:M1=1200,M2=-300`. The bridge waits for that controller's `OK` before sending its next one, so commands never pile up and the newest value always wins. Controllers run side by side: a busy 32-motor bus does not slow down a 4-motor one.
 - When every motor on the controller has a row, each update includes all of them. The controller then starts all the drives with one broadcast frame, which is the fastest path.
 - The controller skips registers that have not changed. A position update with the same speed is 3 short frames per drive.
 - A new target replaces the old one immediately (it does not wait for the motor to arrive). The drive moves toward the newest target with your Speed and Ramp, so the motor follows the DMX like a smoothed fader.
@@ -209,7 +215,7 @@ Menu names vary between versions; the idea is the same everywhere:
 
 | Symptom | Check |
 |---|---|
-| *controller not answering* | Ping the controller IP. Is the Controller port 8001 and the Reply port the sketch's `PC_UDP_PORT`? Is the app allowed through the Windows Firewall? Is the PC on the same subnet? |
+| *Not answering* on a controller panel | Ping the controller IP. Is the Controller port 8001 and the Reply port the sketch's `PC_UDP_PORT`? Is the app allowed through the Windows Firewall? Is the PC on the same subnet? |
 | Incoming DMX list stays empty | Firewall (as above). Is Resolume's Target IP this PC? Is the right network card picked in Resolume's DMX preferences? Another program on port 6454? Try sACN or `127.0.0.1` |
 | "Could not start … port" | Another bridge, or a program that receives Art-Net/sACN (Resolume's DMX input, a visualiser), holds the port. Close it or switch protocol |
 | Universe arrives with a different number | Use the number shown in Incoming DMX (section 5) |
@@ -224,4 +230,4 @@ Menu names vary between versions; the idea is the same everywhere:
 
 ## 10. Test without hardware
 
-`python test_bridge.py` checks the packet parsing and the mapping. It then runs the bridge against a simulated controller on this PC with real Art-Net and sACN packets: start-up, 8/16-bit, all-motor updates, deadband, rate limit under flooding, keepalive, lost source, STOP, error recovery and smoothing. Last, it tests the settings page: every button's API, and that requests from another website or a foreign host name are refused.
+`python test_bridge.py` checks the packet parsing and the mapping. It then runs the bridge against a simulated controller on this PC with real Art-Net and sACN packets: start-up, 8/16-bit, all-motor updates, deadband, rate limit under flooding, keepalive, lost source, STOP, error recovery and smoothing. It also runs two controllers on one reply port, one with 32 motors. Last, it tests the settings page: every button's API, and that requests from another website or a foreign host name are refused.

@@ -10,6 +10,7 @@ Tests for jmc_dmx_bridge.py - no hardware needed.
    bridge. The test checks the position commands that reach the controller.
 """
 
+import os
 import re
 import socket
 import struct
@@ -28,6 +29,8 @@ def check(cond, what, detail=""):
     else:
         FAIL += 1
         print("FAIL: %s %s" % (what, detail))
+        if os.environ.get("GITHUB_ACTIONS"):
+            print("::error title=test_bridge::%s %s" % (what, str(detail)[:300]))
 
 
 # --------------------------------------------------------------------------- packet builders
@@ -103,21 +106,39 @@ def unit_tests():
 
     cfg = jb.default_config()
     check(jb.check_config(cfg) == [], "default settings are valid", str(jb.check_config(cfg)))
-    cfg["motors"][1]["motor"] = 1
+    cfg["controllers"][0]["motors"][1]["motor"] = 1
     check(any("used twice" in p for p in jb.check_config(cfg)), "a motor used twice is refused")
     cfg = jb.default_config()
-    cfg["motors"][0]["channel"] = 512
+    cfg["controllers"][0]["motors"][0]["channel"] = 512
     check(any("511" in p for p in jb.check_config(cfg)), "16-bit on channel 512 refused (no fine channel)")
-    cfg["motors"][0].update(bits=8, dmx_max=65535)
+    cfg["controllers"][0]["motors"][0].update(bits=8, dmx_max=65535)
     check(any("0..255" in p for p in jb.check_config(cfg)), "8-bit DMX max above 255 refused")
-    cfg["motors"][0].update(dmx_max=255)
+    cfg["controllers"][0]["motors"][0].update(dmx_max=255)
     check(jb.check_config(cfg) == [], "8-bit on channel 512 is fine", str(jb.check_config(cfg)))
     cfg["input"].update(artnet=False, sacn=False)
     check(any("Art-Net" in p for p in jb.check_config(cfg)), "no input protocol refused")
 
-    loaded = jb.merge(jb.default_config(), {"controller": {"ip": "10.0.0.5"}})
-    check(loaded["controller"]["ip"] == "10.0.0.5" and loaded["controller"]["port"] == 8001,
+    loaded = jb.fill_defaults({"controllers": [{"ip": "10.0.0.5"}]})
+    check(loaded["controllers"][0]["ip"] == "10.0.0.5" and loaded["controllers"][0]["port"] == 8001,
           "settings file merges into defaults")
+    old = {"controller": {"ip": "10.0.0.9", "port": 9001, "reply_port": 9000}, "motors": [{"motor": 3, "channel": 5}]}
+    c, probs = jb.normalize_config(old)
+    c0 = c["controllers"][0]
+    check(not probs and c0["ip"] == "10.0.0.9" and c0["port"] == 9001 and c["network"]["reply_port"] == 9000
+          and c0["motors"][0]["motor"] == 3 and c0["motors"][0]["channel"] == 5 and "controller" not in c,
+          "settings from 0.6.0-beta (one controller) are converted", str(probs))
+    cfg = jb.default_config()
+    cfg["controllers"][0]["motors"] = [dict(jb.default_motor(i), channel=1) for i in range(1, 33)]
+    check(jb.check_config(cfg) == [], "32 motors on one controller allowed", str(jb.check_config(cfg)[:2]))
+    cfg["controllers"][0]["motors"].append(dict(jb.default_motor(33), channel=1))
+    check(any("at most 32" in x for x in jb.check_config(cfg)), "a 33rd motor is refused")
+    cfg = jb.default_config()
+    cfg["controllers"].append(jb.default_controller(2))
+    check(jb.check_config(cfg) == [], "two controllers with different IPs", str(jb.check_config(cfg)))
+    cfg["controllers"][1]["ip"] = cfg["controllers"][0]["ip"]
+    check(any("same address" in x for x in jb.check_config(cfg)), "two controllers with the same address refused")
+    cfg["controllers"][1]["enabled"] = False
+    check(jb.check_config(cfg) == [], "a switched-off controller is not checked")
 
     check(jb.parse_version("JMCMotors 0.6.0 (max 32 motors)") == (0, 6, 0), "firmware version parsed")
     check(jb.parse_version("JMCMotors 0.5.1") < jb.MIN_FIRMWARE, "older firmware detected")
@@ -215,18 +236,20 @@ def live_tests():
     reply_port, art_port, sacn_port = free_port(), free_port(), free_port()
     ctl = FakeController(motors=3, reply_port=reply_port)
     cfg = jb.default_config()
-    cfg["controller"].update(link="udp", ip="127.0.0.1", port=ctl.port, reply_port=reply_port)
+    cfg["controllers"][0].update(link="udp", ip="127.0.0.1", port=ctl.port)
+    cfg["network"]["reply_port"] = reply_port
     cfg["input"].update(artnet=True, sacn=True, listen_ip="0.0.0.0", artnet_port=art_port, sacn_port=sacn_port)
     cfg["stream"].update(max_rate_hz=40, deadband_steps=2, watchdog_ms=600, smooth_ms=0, source_timeout_s=0.6)
     m1 = dict(jb.default_motor(1), universe=0, channel=1, steps_min=0, steps_max=4000)          # Art-Net 16-bit
     m2 = dict(jb.default_motor(2), universe=0, channel=3, steps_min=-1000, steps_max=1000)      # Art-Net 16-bit
     m3 = dict(jb.default_motor(3), universe=5, channel=10, bits=8, dmx_min=0, dmx_max=255,      # sACN 8-bit
               steps_min=0, steps_max=255)
-    cfg["motors"] = [m1, m2, m3]
+    cfg["controllers"][0]["motors"] = [m1, m2, m3]
     check(jb.check_config(cfg) == [], "live-test settings valid", str(jb.check_config(cfg)))
     logs = []
     br = jb.Bridge(cfg, log=logs.append)
     br.start()
+    c0 = br.ctrls[0]
     tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def art(values):
@@ -237,7 +260,7 @@ def live_tests():
 
     try:
         # start-up: version, motor count, watchdog, speed and ramps
-        check(wait_for(lambda: br.controller_count == 3), "bridge read the motor count (MC:?)", str(br.controller_count))
+        check(wait_for(lambda: c0.controller_count == 3), "bridge read the motor count (MC:?)", str(c0.controller_count))
         check(wait_for(lambda: ctl.wd == 600), "watchdog set on the controller", str(ctl.wd))
         setup = [l for _, l in ctl.log]
         check("V:M1=2.0" in setup and "ACC:M2=5.0" in setup and "DEC:M3=5.0" in setup, "speed / ramps sent per motor", str(setup))
@@ -314,12 +337,12 @@ def live_tests():
         check(wait_for(lambda: ctl.pos.get(3) == 69), "Resume follows DMX again", str(ctl.pos))
 
         # wrong motor number on the controller: error reported, bridge keeps running
-        cfg["motors"][2]["motor"] = 9
+        cfg["controllers"][0]["motors"][2]["motor"] = 9
         sacn({10: 200})
         art(put16(put16({}, 1, 65535), 3, 65535))
-        check(wait_for(lambda: br.stats["errors"] > 0), "ERR reply counted", str(br.stats))
+        check(wait_for(lambda: c0.stats["errors"] > 0), "ERR reply counted", str(c0.stats))
         check(any("ERR:P motor must be" in l for l in logs), "ERR reply shown in the log")
-        cfg["motors"][2]["motor"] = 3
+        cfg["controllers"][0]["motors"][2]["motor"] = 3
         sacn({10: 200})
         art(put16(put16({}, 1, 65535), 3, 65535))
         check(wait_for(lambda: ctl.pos.get(1) == 4000 and ctl.pos.get(3) == 200), "recovers after the error", str(ctl.pos))
@@ -336,10 +359,11 @@ def smoothing_test():
     reply_port, art_port = free_port(), free_port()
     ctl = FakeController(motors=1, reply_port=reply_port)
     cfg = jb.default_config()
-    cfg["controller"].update(ip="127.0.0.1", port=ctl.port, reply_port=reply_port)
+    cfg["controllers"][0].update(ip="127.0.0.1", port=ctl.port)
+    cfg["network"]["reply_port"] = reply_port
     cfg["input"].update(artnet=True, sacn=False, artnet_port=art_port)
     cfg["stream"].update(max_rate_hz=50, smooth_ms=200, watchdog_ms=0, deadband_steps=1, send_settings=False)
-    cfg["motors"] = [dict(jb.default_motor(1), bits=8, channel=1, dmx_min=0, dmx_max=255, steps_min=0, steps_max=2550)]
+    cfg["controllers"][0]["motors"] = [dict(jb.default_motor(1), bits=8, channel=1, dmx_min=0, dmx_max=255, steps_min=0, steps_max=2550)]
     br = jb.Bridge(cfg, log=lambda m: None)
     br.start()
     tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -372,9 +396,10 @@ def settings_page_test():
     ctl = FakeController(motors=1, reply_port=reply_port)
     path = _os.path.join(tempfile.mkdtemp(), "settings.json")
     cfg = jb.default_config()
-    cfg["controller"].update(ip="127.0.0.1", port=ctl.port, reply_port=reply_port)
+    cfg["controllers"][0].update(ip="127.0.0.1", port=ctl.port)
+    cfg["network"]["reply_port"] = reply_port
     cfg["input"].update(sacn=False, artnet_port=art_port)
-    cfg["motors"] = [dict(jb.default_motor(1), steps_max=1000)]
+    cfg["controllers"][0]["motors"] = [dict(jb.default_motor(1), steps_max=1000)]
     jb.save_config(path, cfg)
     app = jb.App(path)
     srv, port = jb.start_ui_server(app, free_port())
@@ -402,9 +427,13 @@ def settings_page_test():
         check(req("GET", "/api/state", host="evil.example:%d" % port)[0] == 403, "foreign Host header refused (DNS rebinding)")
         check(req("POST", "/api/start", {"cfg": s["cfg"]}, token=False)[0] == 403, "change without the app header refused (other websites)")
         check(not app.bridge, "refused request started nothing")
-        st, r = req("POST", "/api/save", {"cfg": dict(s["cfg"], motors=[dict(s["cfg"]["motors"][0], channel=600)])})
+        def with_motor(**kw):
+            c = _json.loads(_json.dumps(s["cfg"]))
+            c["controllers"][0]["motors"][0].update(kw)
+            return c
+        st, r = req("POST", "/api/save", {"cfg": with_motor(channel=600)})
         check(st == 200 and not r["ok"] and "511" in r["problems"][0], "invalid settings refused with a reason", str(r))
-        st, r = req("POST", "/api/save", {"cfg": dict(s["cfg"], motors=[dict(s["cfg"]["motors"][0], channel="abc")])})
+        st, r = req("POST", "/api/save", {"cfg": with_motor(channel="abc")})
         check(not r["ok"], "text in a number field refused", str(r))
         st, r = req("POST", "/api/start", {"cfg": s["cfg"]})
         check(r["ok"] and app.bridge is not None, "Start from the page", str(r))
@@ -413,7 +442,7 @@ def settings_page_test():
             time.sleep(0.03)
         check(wait_for(lambda: ctl.pos.get(1) == 500), "page-started bridge moves the motor", str(ctl.pos))
         st, s = req("GET", "/api/state")
-        row = s["live"]["rows"][0]
+        row = s["live"]["controllers"][0]["rows"][0]
         check(row["dmx"] == 32768 and row["target"] == 500 and row["sent"] == 500, "live row: DMX, target, sent", str(row))
         check(s["live"]["universes"][0]["universe"] == 0, "incoming universe listed")
         req("POST", "/api/estop", {})
@@ -437,10 +466,85 @@ def settings_page_test():
         tx.close()
 
 
+def multi_controller_test():
+    """Two controllers on one reply port, one of them with 32 motors."""
+    reply_port, art_port = free_port(), free_port()
+    a = FakeController(motors=32, reply_port=reply_port)
+    b = FakeController(motors=2, reply_port=reply_port, bus_ms_per_motor=150)  # a very slow bus
+    cfg = jb.default_config()
+    cfg["network"]["reply_port"] = reply_port
+    cfg["input"].update(sacn=False, artnet_port=art_port)
+    cfg["stream"].update(watchdog_ms=0, send_settings=False)
+    ca = jb.default_controller(1, 0)
+    ca.update(name="Stage left", ip="127.0.0.1", port=a.port)
+    ca["motors"] = [dict(jb.default_motor(i), universe=0, channel=2 * i - 1, steps_max=32000) for i in range(1, 33)]
+    cb = jb.default_controller(2, 0)
+    cb.update(name="Stage right", ip="127.0.0.1", port=b.port)
+    cb["motors"] = [dict(jb.default_motor(1), universe=1, channel=1, bits=8, dmx_max=255, steps_max=255),
+                    dict(jb.default_motor(2), universe=1, channel=2, bits=8, dmx_max=255, steps_max=255)]
+    cfg["controllers"] = [ca, cb]
+    check(jb.check_config(cfg) == [], "two controllers, 32 + 2 motors: valid", str(jb.check_config(cfg)[:3]))
+    logs = []
+    br = jb.Bridge(cfg, log=logs.append)
+    br.start()
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        check(wait_for(lambda: br.ctrls[0].controller_count == 32 and br.ctrls[1].controller_count == 2, 4),
+              "each controller answered on the shared reply port",
+              "%s %s" % (br.ctrls[0].controller_count, br.ctrls[1].controller_count))
+        vals = {}
+        for i in range(1, 33):
+            put16(vals, 2 * i - 1, i * 2000)                  # motor i -> i*2000/65535*32000 steps
+        want_a = {i: round(i * 2000 / 65535 * 32000) for i in range(1, 33)}
+        for _ in range(40):
+            tx.sendto(artnet_packet(0, dmx_with(vals)), ("127.0.0.1", art_port))
+            tx.sendto(artnet_packet(1, dmx_with({1: 100, 2: 200})), ("127.0.0.1", art_port))
+            time.sleep(0.025)
+        check(wait_for(lambda: all(a.pos.get(i) == v for i, v in want_a.items()), 3),
+              "32 motors on one controller follow their channels", str({i: a.pos.get(i) for i in (1, 16, 32)}))
+        last = a.p_lines()[-1]
+        check(last.count("=") == 32 and last.startswith("P:M1=") and ",M32=" in last,
+              "all 32 motors in one command (broadcast start)", last[:60])
+        check(wait_for(lambda: b.pos.get(1) == 100 and b.pos.get(2) == 200, 3), "second controller follows its universe", str(b.pos))
+        check(not any(l.startswith("P:") and "M3=" in l for l in b.p_lines()), "second controller gets only its own motors")
+        check(br.ctrls[0].stats["errors"] == 0 and br.ctrls[1].stats["errors"] == 0, "replies routed to the right controller",
+              "%s %s" % (br.ctrls[0].stats, br.ctrls[1].stats))
+        n0, n1 = br.ctrls[0].stats["commands"], br.ctrls[1].stats["commands"]
+        t0 = time.time()
+        k = 0
+        while time.time() - t0 < 1.5:                          # both sources keep moving
+            k += 1
+            v = {}
+            for i in range(1, 33):
+                put16(v, 2 * i - 1, (i * 2000 + k * 400) % 65535)
+            tx.sendto(artnet_packet(0, dmx_with(v)), ("127.0.0.1", art_port))
+            tx.sendto(artnet_packet(1, dmx_with({1: k % 250, 2: (k * 2) % 250})), ("127.0.0.1", art_port))
+            time.sleep(0.02)
+        fast, slow = br.ctrls[0].stats["commands"] - n0, br.ctrls[1].stats["commands"] - n1
+        check(fast > slow * 2 and slow >= 2, "a slow controller does not hold up the other",
+              "fast %d vs slow %d commands in 1.5 s" % (fast, slow))
+        check(any(l.startswith("[Stage left]") for l in logs) and any(l.startswith("[Stage right]") for l in logs),
+              "log lines carry the controller name")
+        br.emergency_stop()
+        check(wait_for(lambda: any(l == "B" for _, l in a.log) and any(l == "B" for _, l in b.log)), "STOP reaches every controller")
+        snap = br.snapshot()
+        check(snap["paused"] and len(snap["controllers"]) == 2, "snapshot: paused, one entry per controller")
+        cfg2 = jb.default_config()
+        cfg2["controllers"] = [dict(ca), dict(cb, enabled=False)]
+        br2 = jb.Bridge(cfg2, log=lambda m: None)
+        check(len(br2.ctrls) == 1 and br2.snapshot()["controllers"][1] is None, "a switched-off controller gets no stream")
+    finally:
+        br.stop()
+        a.close()
+        b.close()
+        tx.close()
+
+
 if __name__ == "__main__":
     unit_tests()
     live_tests()
     smoothing_test()
     settings_page_test()
+    multi_controller_test()
     print("%d passed, %d failed" % (PASS, FAIL))
     raise SystemExit(1 if FAIL else 0)

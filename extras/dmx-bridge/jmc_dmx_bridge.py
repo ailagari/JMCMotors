@@ -80,6 +80,10 @@ def parse_version(text):
 
 
 # --------------------------------------------------------------------------- settings
+MAX_MOTORS = 32          # per controller: drive slave IDs 1..32 on one RS-485 bus
+MAX_CONTROLLERS = 16
+
+
 def default_motor(n):
     return {
         "enabled": True,
@@ -96,15 +100,24 @@ def default_motor(n):
     }
 
 
+def default_controller(n=1, motors=2):
+    return {
+        "name": "Controller %d" % n,
+        "enabled": True,
+        "link": "udp",                # "udp" (CONTROLLINO / ESP32 / Mega) or "serial" (Uno over USB)
+        "ip": "192.168.1.%d" % (100 + n),
+        "port": 8001,                 # BOARD_UDP_PORT in the sketch
+        "com_port": "COM3",
+        "baud": 57600,
+        "motors": [default_motor(i) for i in range(1, motors + 1)],
+    }
+
+
 def default_config():
     return {
-        "controller": {
-            "link": "udp",            # "udp" (CONTROLLINO / ESP32 / Mega) or "serial" (Uno over USB)
-            "ip": "192.168.1.101",
-            "port": 8001,
-            "reply_port": 8000,       # the PC_PORT set in the sketch: replies and events come here
-            "com_port": "COM3",
-            "baud": 57600,
+        "controllers": [default_controller(1)],
+        "network": {
+            "reply_port": 8000,       # PC_UDP_PORT in every sketch: replies and events come here
         },
         "input": {
             "artnet": True,
@@ -114,14 +127,13 @@ def default_config():
             "sacn_port": SACN_PORT,
         },
         "stream": {
-            "max_rate_hz": 40,        # most position updates per second
+            "max_rate_hz": 40,        # most position updates per second, per controller
             "deadband_steps": 2,      # smaller changes are not sent (DMX noise)
             "smooth_ms": 0,           # glide between DMX values (8-bit sources: 100..200); 0 = off
-            "watchdog_ms": 1000,      # controller stops the motors if the bridge goes quiet; 0 = off
-            "send_settings": True,    # write speed / ramps to the controller when starting
+            "watchdog_ms": 1000,      # controllers stop their motors if the bridge goes quiet; 0 = off
+            "send_settings": True,    # write speed / ramps to the controllers when starting
             "source_timeout_s": 2.0,  # a universe that stops arriving: motors hold position
         },
-        "motors": [default_motor(1), default_motor(2)],
     }
 
 
@@ -136,13 +148,42 @@ def merge(base, override):
     return out
 
 
+def migrate(raw):
+    """Settings from before several controllers (one "controller" + "motors")."""
+    if isinstance(raw, dict) and "controllers" not in raw and ("controller" in raw or "motors" in raw):
+        raw = dict(raw)
+        c = dict(raw.pop("controller", None) or {})
+        reply_port = c.pop("reply_port", None)
+        c["motors"] = raw.pop("motors", [])
+        c.setdefault("name", "Controller 1")
+        raw["controllers"] = [c]
+        if reply_port is not None:
+            raw["network"] = dict(raw.get("network") or {}, reply_port=reply_port)
+    return raw
+
+
+def fill_defaults(raw):
+    """Any settings (file, page, older version) -> complete settings."""
+    raw = migrate(raw if isinstance(raw, dict) else {})
+    cfg = merge(default_config(), {k: v for k, v in raw.items() if k != "controllers"})
+    ctrls = raw.get("controllers")
+    if isinstance(ctrls, list):
+        cfg["controllers"] = []
+        for i, c in enumerate(ctrls, 1):
+            c = c if isinstance(c, dict) else {}
+            out = merge(default_controller(i, 0), {k: v for k, v in c.items() if k != "motors"})
+            ms = c.get("motors")
+            out["motors"] = [merge(default_motor(j), m if isinstance(m, dict) else {})
+                             for j, m in enumerate(ms if isinstance(ms, list) else [], 1)]
+            cfg["controllers"].append(out)
+    return cfg
+
+
 def load_config(path):
-    cfg = default_config()
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            cfg = merge(cfg, json.load(f))
-        cfg["motors"] = [merge(default_motor(i + 1), m) for i, m in enumerate(cfg.get("motors", []))]
-    return cfg
+            return fill_defaults(json.load(f))
+    return default_config()
 
 
 def save_config(path, cfg):
@@ -217,29 +258,48 @@ def map_steps(v, m, exact=False):
 
 
 # --------------------------------------------------------------------------- controller links
-class UdpLink:
-    def __init__(self, ip, port, reply_port, on_line):
-        self.addr = (ip, int(port))
-        self.on_line = on_line
+class UdpHub:
+    """One UDP socket on the reply port (PC_UDP_PORT in the sketches) shared by
+    every network controller. A controller answers and sends events from its own
+    port, so each line is routed to its controller by the sender's address."""
+
+    def __init__(self, reply_port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", int(reply_port)))
         self.sock.settimeout(0.2)
+        self.routes = {}                 # (ip, port) -> on_line
+        self.lock = threading.Lock()
         self.running = True
         threading.Thread(target=self._rx, daemon=True).start()
 
-    def send(self, line):
-        self.sock.sendto(line.encode("ascii"), self.addr)
+    def link(self, ip, port, on_line):
+        addr = (socket.gethostbyname(ip), int(port))
+        with self.lock:
+            if addr in self.routes:
+                raise RuntimeError("two controllers with the address %s:%d" % addr)
+            self.routes[addr] = on_line
+        return HubLink(self, addr)
+
+    def _route(self, addr):
+        with self.lock:
+            cb = self.routes.get(addr)
+            if cb is None:                   # from another port of a known controller IP
+                same = [f for (ip, _), f in self.routes.items() if ip == addr[0]]
+                cb = same[0] if len(same) == 1 else None
+        return cb
 
     def _rx(self):
         while self.running:
             try:
-                data, _ = self.sock.recvfrom(2048)
+                data, addr = self.sock.recvfrom(2048)
             except socket.timeout:
                 continue
             except OSError:
                 break
-            self.on_line(data.decode("ascii", "replace").strip())
+            cb = self._route(addr)
+            if cb:
+                cb(data.decode("ascii", "replace").strip())
 
     def close(self):
         self.running = False
@@ -247,6 +307,18 @@ class UdpLink:
             self.sock.close()
         except OSError:
             pass
+
+
+class HubLink:
+    def __init__(self, hub, addr):
+        self.hub, self.addr = hub, addr
+
+    def send(self, line):
+        self.hub.sock.sendto(line.encode("ascii"), self.addr)
+
+    def close(self):
+        with self.hub.lock:
+            self.hub.routes.pop(self.addr, None)
 
 
 class SerialLink:
@@ -286,18 +358,21 @@ class SerialLink:
             pass
 
 
-# --------------------------------------------------------------------------- the bridge
-class Bridge:
-    """DMX in -> steps -> controller. Thread-safe; the GUI reads snapshot()."""
+# --------------------------------------------------------------------------- one controller's stream
+class ControllerStream:
+    """DMX targets -> P commands for one controller (one IP or COM port, up to
+    32 motors). Each controller has its own thread, so a slow or silent one
+    never holds up the others."""
 
-    def __init__(self, cfg, log=print):
+    def __init__(self, bridge, index, cfg):
+        self.bridge = bridge
+        self.index = index
         self.cfg = cfg
-        self.log = log
-        self.lock = threading.Lock()
-        self.universes = {}          # universe -> {"data", "proto", "src", "t", "count"}
+        self.name = cfg.get("name") or "Controller %d" % (index + 1)
         self.replies = queue.Queue()
         self.dirty = threading.Event()
         self.running = False
+        self.thread = None
         self.link = None
         self.controller_count = None
         self.version = ""
@@ -305,70 +380,320 @@ class Bridge:
         self.targets = {}            # motor -> current target from DMX
         self.filtered = {}           # motor -> smoothed target (smooth_ms)
         self.stats = {"commands": 0, "errors": 0, "last_reply": "", "rate": 0.0}
-        self.threads = []
-        self.in_socks = []
-        self.in_proto = {}           # socket -> "Art-Net" / "sACN"
         self._last_err, self._last_err_t = None, 0.0
         self.paused = False          # after STOP: no position commands until resume()
         self.cmd_lock = threading.Lock()
 
+    def log(self, msg):
+        self.bridge.log(("[%s] " % self.name if self.bridge.multi else "") + msg)
+
     # ---- lifecycle
-    def start(self):
-        c = self.cfg["controller"]
+    def open(self, hub):
+        c = self.cfg
         if c["link"] == "serial":
             self.link = SerialLink(c["com_port"], c["baud"], self._on_line)
             self.log("Controller: %s at %s baud" % (c["com_port"], c["baud"]))
         else:
-            self.link = UdpLink(c["ip"], c["port"], c["reply_port"], self._on_line)
-            self.log("Controller: %s:%s (replies on port %s)" % (c["ip"], c["port"], c["reply_port"]))
-        self._open_inputs()
+            self.link = hub.link(c["ip"], c["port"], self._on_line)
+            self.log("Controller: %s:%s" % (c["ip"], c["port"]))
+
+    def start(self):
         self.running = True
-        for fn in (self._rx_dmx, self._tx):
-            t = threading.Thread(target=fn, daemon=True)
-            t.start()
-            self.threads.append(t)
+        self.thread = threading.Thread(target=self._tx, daemon=True)
+        self.thread.start()
 
     def stop(self):
-        if not self.running:
-            return
         self.running = False
         self.dirty.set()
-        for t in self.threads:
-            t.join(timeout=1.5)
-        self.threads = []
+        if self.thread:
+            self.thread.join(timeout=2.0)
+            self.thread = None
         if self.link:
             try:
-                if int(self.cfg["stream"]["watchdog_ms"]) > 0:
+                if int(self.bridge.cfg["stream"]["watchdog_ms"]) > 0:
                     self.link.send("WD:0")   # leaving on purpose: no watchdog stop
             except OSError:
                 pass
             self.link.close()
             self.link = None
-        for s in self.in_socks:
-            s.close()
-        self.in_socks = []
-        self.log("Bridge stopped")
 
     def emergency_stop(self):
-        """B: every motor stops on its ramp, sent at once. The stream pauses
-        (no position commands) until resume(), so nothing restarts the motors."""
         if self.link:
             with self.cmd_lock:              # no position command can slip in after B
                 self.paused = True
-                self.link.send("B")
-            self.log("STOP sent (B) - streaming paused, press Resume to follow DMX again")
+                try:
+                    self.link.send("B")
+                except OSError as e:
+                    self.log("STOP could not be sent: %s" % e)
 
     def resume(self):
         with self.cmd_lock:
             self.paused = False
             self.sent = {}                   # send every current target again
         self.dirty.set()
+
+    # ---- replies
+    def _on_line(self, text):
+        if text.startswith("EVENT:") or text == "Motor ready":
+            self.log(text)
+            return
+        self.replies.put(text)
+
+    def _command(self, line, timeout=1.0, motion=False):
+        """Send one command and wait for its reply (one in flight at a time).
+        motion=True: not sent while paused (returns None)."""
+        with self.cmd_lock:
+            if motion and self.paused:
+                return None
+            while not self.replies.empty():
+                try:
+                    self.replies.get_nowait()
+                except queue.Empty:
+                    break
+            self.link.send(line)
+        try:
+            reply = self.replies.get(timeout=timeout)
+        except queue.Empty:
+            reply = None
+        bad = reply is None or reply.startswith("ERR")
+        with self.bridge.lock:
+            self.stats["last_reply"] = reply if reply is not None else "(no reply)"
+            if bad:
+                self.stats["errors"] += 1
+        if bad:
+            text = reply if reply is not None else "no reply"
+            now = time.time()
+            if text != self._last_err or now - self._last_err_t > 5.0:   # a repeating error: once per 5 s
+                self.log("%s -> %s" % (line if len(line) < 120 else line[:117] + "...", text))
+                self._last_err, self._last_err_t = text, now
+        return reply
+
+    # ---- targets
+    def compute_targets(self, exact=False):
+        """motor -> steps for every enabled motor whose universe is live."""
+        out = {}
+        now = time.time()
+        timeout = float(self.bridge.cfg["stream"].get("source_timeout_s", 2.0))
+        with self.bridge.lock:
+            for m in self.cfg["motors"]:
+                if not m.get("enabled"):
+                    continue
+                u = self.bridge.universes.get(int(m["universe"]))
+                if not u or now - u["t"] > timeout:
+                    continue                       # no data: hold position
+                v = read_value(u["data"], int(m["channel"]), m.get("bits", 16))
+                out[int(m["motor"])] = map_steps(v, m, exact)
+            self.targets = {n: int(round(s)) for n, s in out.items()}
+        return out
+
+    def smooth(self, raw, dt):
+        """Glide toward the DMX targets (first-order, time constant smooth_ms).
+        Returns rounded steps and whether a motor is still gliding."""
+        tau = float(self.bridge.cfg["stream"].get("smooth_ms", 0)) / 1000.0
+        out, gliding = {}, False
+        for n, r in raw.items():
+            f = self.filtered.get(n)
+            if tau <= 0 or f is None:
+                f = r                               # off, or the first value: no glide
+            else:
+                f += (r - f) * (1.0 - math.exp(-max(0.0, dt) / tau))
+                if abs(r - f) < 0.5:
+                    f = r
+                else:
+                    gliding = True
+            self.filtered[n] = f
+            out[n] = int(round(f))
+        for n in list(self.filtered):
+            if n not in raw:
+                del self.filtered[n]                # source lost: start fresh when it returns
+        return out, gliding
+
+    # ---- the stream
+    def _setup(self):
+        reply = self._command("VER", timeout=1.0)
+        if reply is None:
+            self.log("No reply from the controller - check IP / port / reply port / firewall (still trying)")
+            return False
+        self.version = reply
+        self.log("Controller: " + reply)
+        fw = parse_version(reply)
+        if fw is None:
+            self.log("WARNING: the device on that address did not answer like a JMCMotors controller")
+        elif fw < MIN_FIRMWARE:
+            self.log("WARNING: controller firmware %s is older than %s - update the JMCMotors library "
+                     "(Arduino Library Manager) and upload the sketch again" %
+                     (".".join(map(str, fw)), ".".join(map(str, MIN_FIRMWARE))))
+        reply = self._command("MC:?", timeout=1.0)
+        if reply and reply.startswith("MC:"):
+            try:
+                self.controller_count = int(reply.split()[1])
+            except (IndexError, ValueError):
+                self.controller_count = None
+        mine = [m for m in self.cfg["motors"] if m.get("enabled")]
+        if self.controller_count and any(int(m["motor"]) > self.controller_count for m in mine):
+            self.log("WARNING: the controller has %d motors (MC); rows above M%d will be refused" %
+                     (self.controller_count, self.controller_count))
+        st = self.bridge.cfg["stream"]
+        if int(st.get("watchdog_ms", 0)) > 0:
+            self._command("WD:%d" % int(st["watchdog_ms"]))
+        if st.get("send_settings", True):
+            for m in mine:
+                n = int(m["motor"])
+                self._command("V:M%d=%s" % (n, float(m["speed"])))
+                self._command("ACC:M%d=%s" % (n, float(m["accel"])))
+                self._command("DEC:M%d=%s" % (n, float(m["accel"])))
+        return True
+
+    def _tx(self):
+        try:
+            self._setup()
+        except OSError as e:
+            self.log("Controller link error: %s" % e)
+        st = self.bridge.cfg["stream"]
+        period = 1.0 / max(1.0, float(st.get("max_rate_hz", 40)))
+        deadband = int(st.get("deadband_steps", 2))
+        wd = int(st.get("watchdog_ms", 0))
+        keepalive = max(0.1, wd / 3000.0) if wd > 0 else 1.0
+        last_send = 0.0
+        last_setup = time.time()
+        last_calc = time.time()
+        gliding = False
+        window_t, window_n = time.time(), 0
+        while self.running:
+            if not gliding:
+                self.dirty.wait(timeout=min(period, keepalive))
+            self.dirty.clear()
+            if not self.running:
+                break
+            now = time.time()
+            wait = period - (now - last_send)
+            if wait > 0:                                   # rate limit: wait, then take the newest values
+                time.sleep(wait)
+            now = time.time()
+            targets, gliding = self.smooth(self.compute_targets(exact=True), now - last_calc)
+            last_calc = now
+            changed = {n: s for n, s in targets.items()
+                       if n not in self.sent or abs(s - self.sent[n]) >= max(1, deadband)}
+            try:
+                if not self.version and time.time() - last_setup > 3.0:
+                    last_setup = time.time()       # controller was not answering at start: try again
+                    self._setup()
+                if changed and not self.paused:
+                    # all of the controller's motors mapped: send them all, so the
+                    # controller can start them with one broadcast (fastest path)
+                    if self.controller_count and len(targets) == self.controller_count:
+                        batch = targets
+                    else:
+                        batch = changed
+                    line = "P:" + ",".join("M%d=%d" % (n, batch[n]) for n in sorted(batch))
+                    reply = self._command(line, motion=True)
+                    if reply == "OK":
+                        self.sent.update(batch)
+                    last_send = time.time()
+                    window_n += 1
+                    with self.bridge.lock:
+                        self.stats["commands"] += 1
+                elif time.time() - last_send >= keepalive:
+                    self._command("PING")                 # keeps the controller's watchdog fed
+                    last_send = time.time()
+            except OSError as e:
+                self.log("Controller link error: %s" % e)
+                time.sleep(0.5)
+            if time.time() - window_t >= 1.0:
+                with self.bridge.lock:
+                    self.stats["rate"] = window_n / (time.time() - window_t)
+                window_t, window_n = time.time(), 0
+
+    def snapshot(self):
+        return {"name": self.name, "version": self.version, "count": self.controller_count,
+                "stats": dict(self.stats), "paused": self.paused,
+                "targets": dict(self.targets), "sent": dict(self.sent)}
+
+
+# --------------------------------------------------------------------------- the bridge
+class Bridge:
+    """DMX in (Art-Net / sACN) -> one stream per controller. Thread-safe; the
+    settings page reads snapshot()."""
+
+    def __init__(self, cfg, log=print):
+        self.cfg = cfg
+        self.log = log
+        self.lock = threading.Lock()
+        self.universes = {}          # universe -> {"data", "proto", "src", "t", "count"}
+        self.running = False
+        self.threads = []
+        self.in_socks = []
+        self.in_proto = {}           # socket -> "Art-Net" / "sACN"
+        self.hub = None
+        self.ctrls = [ControllerStream(self, i, c) for i, c in enumerate(cfg["controllers"])
+                      if c.get("enabled", True)]
+        self.multi = len(self.ctrls) > 1
+
+    @property
+    def paused(self):
+        return bool(self.ctrls) and all(c.paused for c in self.ctrls)
+
+    # ---- lifecycle
+    def start(self):
+        try:
+            if any(c.cfg["link"] != "serial" for c in self.ctrls):
+                port = int(self.cfg["network"]["reply_port"])
+                self.hub = UdpHub(port)
+                self.log("Replies from the controllers on port %d" % port)
+            for c in self.ctrls:
+                c.open(self.hub)
+            self._open_inputs()
+        except Exception:
+            self._close_links()
+            raise
+        self.running = True
+        t = threading.Thread(target=self._rx_dmx, daemon=True)
+        t.start()
+        self.threads.append(t)
+        for c in self.ctrls:
+            c.start()
+
+    def _close_links(self):
+        for c in self.ctrls:
+            if c.link:
+                c.link.close()
+                c.link = None
+        if self.hub:
+            self.hub.close()
+            self.hub = None
+        for s in self.in_socks:
+            s.close()
+        self.in_socks = []
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        for c in self.ctrls:
+            c.stop()
+        for t in self.threads:
+            t.join(timeout=1.5)
+        self.threads = []
+        self._close_links()
+        self.log("Bridge stopped")
+
+    def emergency_stop(self):
+        """B to every controller at once. Each stream pauses (no position
+        commands) until resume(), so nothing restarts the motors."""
+        for c in self.ctrls:
+            c.emergency_stop()
+        self.log("STOP sent (B) to %s - streaming paused, press Resume to follow DMX again" %
+                 ("every controller" if self.multi else "the controller"))
+
+    def resume(self):
+        for c in self.ctrls:
+            c.resume()
         self.log("Streaming resumed")
 
     # ---- DMX input
     def _open_inputs(self):
         inp = self.cfg["input"]
-        ip = inp.get("listen_ip", "0.0.0.0")
+        ip = inp.get("listen_ip", "0.0.0.0") or "0.0.0.0"
         if inp.get("artnet"):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -380,12 +705,13 @@ class Bridge:
         if inp.get("sacn"):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0" if ip in ("", "0.0.0.0") else ip, int(inp.get("sacn_port", SACN_PORT))))
+            s.bind((ip, int(inp.get("sacn_port", SACN_PORT))))
             joined = []
-            for u in sorted({int(m["universe"]) for m in self.cfg["motors"] if m.get("enabled")}):
+            universes = {int(m["universe"]) for c in self.ctrls for m in c.cfg["motors"] if m.get("enabled")}
+            for u in sorted(universes):
                 if 1 <= u <= 63999:
                     try:
-                        mreq = socket.inet_aton(sacn_group(u)) + socket.inet_aton("0.0.0.0" if ip in ("", "0.0.0.0") else ip)
+                        mreq = socket.inet_aton(sacn_group(u)) + socket.inet_aton(ip)
                         s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
                         joined.append(u)
                     except OSError as e:
@@ -418,218 +744,83 @@ class Bridge:
                     u = self.universes.setdefault(universe, {"count": 0})
                     u.update(data=dmx, proto=self.in_proto[s], src=addr[0], t=now)
                     u["count"] += 1
-                self.dirty.set()
+                for c in self.ctrls:
+                    c.dirty.set()
 
-    # ---- controller replies
-    def _on_line(self, text):
-        if text.startswith("EVENT:") or text == "Motor ready":
-            self.log(text)
-            return
-        self.replies.put(text)
-
-    def _command(self, line, timeout=0.5, motion=False):
-        """Send one command and wait for its reply (one in flight at a time).
-        motion=True: not sent while paused (returns None)."""
-        with self.cmd_lock:
-            if motion and self.paused:
-                return None
-            while not self.replies.empty():
-                try:
-                    self.replies.get_nowait()
-                except queue.Empty:
-                    break
-            self.link.send(line)
-        try:
-            reply = self.replies.get(timeout=timeout)
-        except queue.Empty:
-            reply = None
-        with self.lock:
-            self.stats["last_reply"] = reply if reply is not None else "(no reply)"
-            if reply is None or reply.startswith("ERR"):
-                self.stats["errors"] += 1
-        if reply is None or reply.startswith("ERR"):
-            text = reply if reply is not None else "no reply"
-            now = time.time()
-            if text != self._last_err or now - self._last_err_t > 5.0:   # a repeating error: once per 5 s
-                self.log("%s -> %s" % (line, text))
-                self._last_err, self._last_err_t = text, now
-        return reply
-
-    # ---- the stream
-    def compute_targets(self, exact=False):
-        """motor -> steps for every enabled motor whose universe is live."""
-        out = {}
-        now = time.time()
-        timeout = float(self.cfg["stream"].get("source_timeout_s", 2.0))
-        with self.lock:
-            for m in self.cfg["motors"]:
-                if not m.get("enabled"):
-                    continue
-                u = self.universes.get(int(m["universe"]))
-                if not u or now - u["t"] > timeout:
-                    continue                       # no data: hold position
-                v = read_value(u["data"], int(m["channel"]), m.get("bits", 16))
-                out[int(m["motor"])] = map_steps(v, m, exact)
-            self.targets = {n: int(round(s)) for n, s in out.items()}
-        return out
-
-    def smooth(self, raw, dt):
-        """Glide toward the DMX targets (first-order, time constant smooth_ms).
-        Returns rounded steps and whether a motor is still gliding."""
-        tau = float(self.cfg["stream"].get("smooth_ms", 0)) / 1000.0
-        out, gliding = {}, False
-        for n, r in raw.items():
-            f = self.filtered.get(n)
-            if tau <= 0 or f is None:
-                f = r                               # off, or the first value: no glide
-            else:
-                f += (r - f) * (1.0 - math.exp(-max(0.0, dt) / tau))
-                if abs(r - f) < 0.5:
-                    f = r
-                else:
-                    gliding = True
-            self.filtered[n] = f
-            out[n] = int(round(f))
-        for n in list(self.filtered):
-            if n not in raw:
-                del self.filtered[n]                # source lost: start fresh when it returns
-        return out, gliding
-
-    def _setup_controller(self):
-        reply = self._command("VER", timeout=1.0)
-        if reply is None:
-            self.log("No reply from the controller - check IP / port / reply port / firewall (still trying)")
-        else:
-            self.version = reply
-            self.log("Controller: " + reply)
-            fw = parse_version(reply)
-            if fw is None:
-                self.log("WARNING: the device on that address did not answer like a JMCMotors controller")
-            elif fw < MIN_FIRMWARE:
-                self.log("WARNING: controller firmware %s is older than %s - update the JMCMotors library "
-                         "(Arduino Library Manager) and upload the sketch again" %
-                         (".".join(map(str, fw)), ".".join(map(str, MIN_FIRMWARE))))
-        reply = self._command("MC:?", timeout=1.0)
-        if reply and reply.startswith("MC:"):
-            try:
-                self.controller_count = int(reply.split()[1])
-            except (IndexError, ValueError):
-                self.controller_count = None
-        st = self.cfg["stream"]
-        if int(st.get("watchdog_ms", 0)) > 0:
-            self._command("WD:%d" % int(st["watchdog_ms"]))
-        if st.get("send_settings", True):
-            for m in self.cfg["motors"]:
-                if not m.get("enabled"):
-                    continue
-                n = int(m["motor"])
-                self._command("V:M%d=%s" % (n, float(m["speed"])))
-                self._command("ACC:M%d=%s" % (n, float(m["accel"])))
-                self._command("DEC:M%d=%s" % (n, float(m["accel"])))
-        return reply is not None
-
-    def _tx(self):
-        try:
-            self._setup_controller()
-        except OSError as e:
-            self.log("Controller link error: %s" % e)
-        st = self.cfg["stream"]
-        period = 1.0 / max(1.0, float(st.get("max_rate_hz", 40)))
-        deadband = int(st.get("deadband_steps", 2))
-        keepalive = max(0.1, int(st.get("watchdog_ms", 1000)) / 3000.0) if int(st.get("watchdog_ms", 0)) > 0 else 1.0
-        last_send = 0.0
-        last_setup = time.time()
-        last_calc = time.time()
-        gliding = False
-        window_t, window_n = time.time(), 0
-        while self.running:
-            if not gliding:
-                self.dirty.wait(timeout=min(period, keepalive))
-            self.dirty.clear()
-            if not self.running:
-                break
-            now = time.time()
-            wait = period - (now - last_send)
-            if wait > 0:                                   # rate limit: wait, then take the newest values
-                time.sleep(wait)
-            now = time.time()
-            targets, gliding = self.smooth(self.compute_targets(exact=True), now - last_calc)
-            last_calc = now
-            changed = {n: s for n, s in targets.items()
-                       if n not in self.sent or abs(s - self.sent[n]) >= max(1, deadband)}
-            try:
-                if not self.version and time.time() - last_setup > 3.0:
-                    last_setup = time.time()       # controller was not answering at start: try again
-                    self._setup_controller()
-                if changed and not self.paused:
-                    # all of the controller's motors mapped: send them all, so the
-                    # controller can start them with one broadcast (fastest path)
-                    if self.controller_count and len(targets) == self.controller_count:
-                        batch = targets
-                    else:
-                        batch = changed
-                    line = "P:" + ",".join("M%d=%d" % (n, batch[n]) for n in sorted(batch))
-                    reply = self._command(line, motion=True)
-                    if reply == "OK":
-                        self.sent.update(batch)
-                    last_send = time.time()
-                    window_n += 1
-                    with self.lock:
-                        self.stats["commands"] += 1
-                elif time.time() - last_send >= keepalive:
-                    self._command("PING")                 # keeps the controller's watchdog fed
-                    last_send = time.time()
-            except OSError as e:
-                self.log("Controller link error: %s" % e)
-                time.sleep(0.5)
-            if time.time() - window_t >= 1.0:
-                with self.lock:
-                    self.stats["rate"] = window_n / (time.time() - window_t)
-                window_t, window_n = time.time(), 0
-
-    # ---- for the window
+    # ---- for the page
     def snapshot(self):
         now = time.time()
         with self.lock:
             unis = [(u, d.get("proto", ""), d.get("src", ""), now - d.get("t", 0), d.get("count", 0))
                     for u, d in sorted(self.universes.items())]
-            return {"universes": unis, "targets": dict(self.targets), "sent": dict(self.sent), "paused": self.paused,
-                    "stats": dict(self.stats), "version": self.version, "count": self.controller_count,
-                    "dmx": {u: d.get("data", b"") for u, d in self.universes.items()}}
+            dmx = {u: d.get("data", b"") for u, d in self.universes.items()}
+            by_index = {c.index: c.snapshot() for c in self.ctrls}
+        return {"universes": unis, "dmx": dmx, "paused": self.paused,
+                "controllers": [by_index.get(i) for i in range(len(self.cfg["controllers"]))]}
 
 
 def check_config(cfg):
     """Readable problems with the settings, or []."""
     p = []
-    seen = set()
-    for i, m in enumerate(cfg["motors"], 1):
-        if not m.get("enabled"):
+    ctrls = cfg.get("controllers", [])
+    if len(ctrls) > MAX_CONTROLLERS:
+        p.append("At most %d controllers" % MAX_CONTROLLERS)
+    if not any(c.get("enabled", True) for c in ctrls):
+        p.append("Add a controller, or switch one on")
+    addresses = {}
+    for ci, c in enumerate(ctrls, 1):
+        if not c.get("enabled", True):
             continue
-        n = int(m["motor"])
-        if not 1 <= n <= 32:
-            p.append("Row %d: motor must be 1..32" % i)
-        if n in seen:
-            p.append("Row %d: motor %d is used twice" % (i, n))
-        seen.add(n)
-        bits = int(m.get("bits", 16))
-        top = 255 if bits == 8 else 65535
-        if bits not in (8, 16):
-            p.append("Row %d: bits must be 8 or 16" % i)
-        if bits == 16 and not 1 <= int(m["channel"]) <= 511:
-            p.append("Row %d: channel must be 1..511 in 16-bit mode (the fine channel is the next one)" % i)
-        if bits == 8 and not 1 <= int(m["channel"]) <= 512:
-            p.append("Row %d: channel must be 1..512" % i)
-        if not (0 <= int(m["universe"]) <= 63999):
-            p.append("Row %d: universe must be 0..63999" % i)
-        for k in ("dmx_min", "dmx_max"):
-            if not 0 <= int(m[k]) <= top:
-                p.append("Row %d: %s must be 0..%d in %d-bit mode" % (i, k.replace("_", " ").upper(), top, bits))
-        if int(m["dmx_min"]) == int(m["dmx_max"]):
-            p.append("Row %d: DMX min and max must differ" % i)
-        if not 0.01 <= float(m["speed"]) <= 1000:
-            p.append("Row %d: speed must be 0.01..1000 rps" % i)
-        if not 0.1 <= float(m["accel"]) <= 3276.7:
-            p.append("Row %d: ramp must be 0.1..3276.7 rps/s" % i)
+        name = (c.get("name") or "").strip() or "Controller %d" % ci
+        pre = name + ": "
+        if c.get("link") == "serial":
+            key = ("serial", str(c.get("com_port", "")).strip().upper())
+            if not key[1]:
+                p.append(pre + "choose the COM port")
+        else:
+            key = (str(c.get("ip", "")).strip(), int(c.get("port", 0)))
+            if not key[0]:
+                p.append(pre + "enter the controller IP")
+            if not 1 <= key[1] <= 65535:
+                p.append(pre + "controller port must be 1..65535")
+        if key in addresses:
+            p.append(pre + "same address as %s" % addresses[key])
+        addresses[key] = name
+        motors = c.get("motors", [])
+        if len(motors) > MAX_MOTORS:
+            p.append(pre + "at most %d motors per controller (one RS-485 bus)" % MAX_MOTORS)
+        seen = set()
+        for i, m in enumerate(motors, 1):
+            if not m.get("enabled"):
+                continue
+            row = pre + "row %d: " % i
+            n = int(m["motor"])
+            if not 1 <= n <= MAX_MOTORS:
+                p.append(row + "motor must be 1..%d" % MAX_MOTORS)
+            if n in seen:
+                p.append(row + "motor %d is used twice" % n)
+            seen.add(n)
+            bits = int(m.get("bits", 16))
+            top = 255 if bits == 8 else 65535
+            if bits not in (8, 16):
+                p.append(row + "bits must be 8 or 16")
+            if bits == 16 and not 1 <= int(m["channel"]) <= 511:
+                p.append(row + "channel must be 1..511 in 16-bit mode (the fine channel is the next one)")
+            if bits == 8 and not 1 <= int(m["channel"]) <= 512:
+                p.append(row + "channel must be 1..512")
+            if not 0 <= int(m["universe"]) <= 63999:
+                p.append(row + "universe must be 0..63999")
+            for k in ("dmx_min", "dmx_max"):
+                if not 0 <= int(m[k]) <= top:
+                    p.append(row + "%s must be 0..%d in %d-bit mode" % (k.replace("_", " ").upper(), top, bits))
+            if int(m["dmx_min"]) == int(m["dmx_max"]):
+                p.append(row + "DMX min and max must differ")
+            if not 0.01 <= float(m["speed"]) <= 1000:
+                p.append(row + "speed must be 0.01..1000 rps")
+            if not 0.1 <= float(m["accel"]) <= 3276.7:
+                p.append(row + "ramp must be 0.1..3276.7 rps/s")
+    if not 1 <= int(cfg.get("network", {}).get("reply_port", 8000)) <= 65535:
+        p.append("Reply port must be 1..65535")
     if not cfg["input"].get("artnet") and not cfg["input"].get("sacn"):
         p.append("Tick Art-Net, sACN or both")
     st = cfg["stream"]
@@ -654,34 +845,48 @@ def asset(name):
     return os.path.join(base, name)
 
 
+_ports_cache = (0.0, [])
+
+
 def serial_ports():
-    try:
-        from serial.tools import list_ports
-        return sorted(p.device for p in list_ports.comports())
-    except Exception:
-        return []
+    """Serial ports on this PC (cached for 2 s: the page asks 4 times a second)."""
+    global _ports_cache
+    if time.time() - _ports_cache[0] > 2.0:
+        try:
+            from serial.tools import list_ports
+            ports = sorted(p.device for p in list_ports.comports())
+        except Exception:
+            ports = []
+        _ports_cache = (time.time(), ports)
+    return _ports_cache[1]
 
 
 def normalize_config(raw):
     """Settings from the page or a file -> (clean settings, problems)."""
     problems = []
     try:
-        cfg = merge(default_config(), raw if isinstance(raw, dict) else {})
-        motors = raw.get("motors", []) if isinstance(raw, dict) else []
-        cfg["motors"] = []
-        for i, m in enumerate(motors if isinstance(motors, list) else [], 1):
-            m = merge(default_motor(i), m if isinstance(m, dict) else {})
+        cfg = fill_defaults(raw)
+        for ci, c in enumerate(cfg["controllers"], 1):
+            name = (str(c.get("name") or "").strip() or "Controller %d" % ci)[:40]
+            c["name"] = name
+            c["enabled"] = bool(c.get("enabled", True))
+            c["link"] = "serial" if c.get("link") == "serial" else "udp"
+            c["ip"], c["com_port"] = str(c["ip"]).strip(), str(c["com_port"]).strip()
             try:
-                for k in ("motor", "universe", "channel", "bits", "dmx_min", "dmx_max", "steps_min", "steps_max"):
-                    m[k] = int(float(m[k]))
-                for k in ("speed", "accel"):
-                    m[k] = float(m[k])
-                m["enabled"] = bool(m.get("enabled", True))
+                c["port"], c["baud"] = int(float(c["port"])), int(float(c["baud"]))
             except (TypeError, ValueError):
-                problems.append("Row %d: every field must be a number" % i)
-            cfg["motors"].append(m)
-        c, st = cfg["controller"], cfg["stream"]
-        c["port"], c["reply_port"], c["baud"] = int(c["port"]), int(c["reply_port"]), int(c["baud"])
+                problems.append(name + ": port and baud must be numbers")
+            for i, m in enumerate(c["motors"], 1):
+                try:
+                    for k in ("motor", "universe", "channel", "bits", "dmx_min", "dmx_max", "steps_min", "steps_max"):
+                        m[k] = int(float(m[k]))
+                    for k in ("speed", "accel"):
+                        m[k] = float(m[k])
+                    m["enabled"] = bool(m.get("enabled", True))
+                except (TypeError, ValueError):
+                    problems.append("%s: row %d: every field must be a number" % (name, i))
+        st = cfg["stream"]
+        cfg["network"]["reply_port"] = int(float(cfg["network"]["reply_port"]))
         for k in ("max_rate_hz", "smooth_ms", "source_timeout_s"):
             st[k] = float(st[k])
         st["deadband_steps"], st["watchdog_ms"] = int(float(st["deadband_steps"])), int(float(st["watchdog_ms"]))
@@ -725,14 +930,20 @@ class App:
         b = self.bridge
         if b:
             s = b.snapshot()
-            rows = []
-            for m in b.cfg["motors"]:
-                data = s["dmx"].get(int(m["universe"]))
-                n = int(m["motor"])
-                rows.append({"dmx": read_value(data, int(m["channel"]), m.get("bits", 16)) if data else None,
-                             "target": s["targets"].get(n), "sent": s["sent"].get(n)})
-            out["live"] = {"rows": rows, "paused": s["paused"], "stats": s["stats"], "controller": s["version"],
-                           "count": s["count"],
+            ctrls = []
+            for c, live in zip(b.cfg["controllers"], s["controllers"]):
+                if live is None:                       # switched off
+                    ctrls.append(None)
+                    continue
+                rows = []
+                for m in c["motors"]:
+                    data = s["dmx"].get(int(m["universe"]))
+                    n = int(m["motor"])
+                    rows.append({"dmx": read_value(data, int(m["channel"]), m.get("bits", 16)) if data else None,
+                                 "target": live["targets"].get(n), "sent": live["sent"].get(n)})
+                ctrls.append({"name": live["name"], "controller": live["version"], "count": live["count"],
+                              "stats": live["stats"], "paused": live["paused"], "rows": rows})
+            out["live"] = {"paused": s["paused"], "controllers": ctrls,
                            "universes": [{"universe": u, "proto": p, "src": src, "age": round(age, 1), "count": c}
                                          for u, p, src, age, c in s["universes"]]}
         return out
@@ -826,13 +1037,20 @@ class UiHandler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if not 0 <= n <= 1000000:
+            self.close_connection = True
+            return self._send(413, {"error": "too large"})
+        raw = self.rfile.read(n)          # read first: a refused request must not reset the connection
         if not self._host_ok() or self.headers.get("X-JMC-Bridge") != "1":
             return self._send(403, {"error": "forbidden"})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 1000000:
-                return self._send(413, {"error": "too large"})
-            body = json.loads(self.rfile.read(n) or b"{}")
+            body = json.loads(raw or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
         except ValueError:
             return self._send(400, {"error": "bad JSON"})
         a, path = self.app, urlparse(self.path).path
@@ -850,7 +1068,8 @@ class UiHandler(BaseHTTPRequestHandler):
             a.resume()
             problems = []
         elif path == "/api/check":
-            problems = normalize_config(body.get("cfg"))[1]
+            cfg, problems = normalize_config(body.get("cfg"))
+            return self._send(200, {"ok": not problems, "problems": problems, "cfg": cfg})
         elif path == "/api/quit":
             self._send(200, {"ok": True, "problems": []})
             a.quit.set()
