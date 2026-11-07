@@ -362,9 +362,85 @@ def smoothing_test():
         tx.close()
 
 
+def settings_page_test():
+    """The settings page's API: works from this PC, refuses everything else."""
+    import http.client
+    import json as _json
+    import os as _os
+    import tempfile
+    reply_port, art_port = free_port(), free_port()
+    ctl = FakeController(motors=1, reply_port=reply_port)
+    path = _os.path.join(tempfile.mkdtemp(), "settings.json")
+    cfg = jb.default_config()
+    cfg["controller"].update(ip="127.0.0.1", port=ctl.port, reply_port=reply_port)
+    cfg["input"].update(sacn=False, artnet_port=art_port)
+    cfg["motors"] = [dict(jb.default_motor(1), steps_max=1000)]
+    jb.save_config(path, cfg)
+    app = jb.App(path)
+    srv, port = jb.start_ui_server(app, free_port())
+
+    def req(method, url, body=None, host="127.0.0.1:%d" % port, token=True):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        h = {"Host": host, "Content-Type": "application/json"}
+        if token:
+            h["X-JMC-Bridge"] = "1"
+        c.request(method, url, body=_json.dumps(body).encode() if body is not None else None, headers=h)
+        r = c.getresponse()
+        data = r.read()
+        c.close()
+        try:
+            return r.status, _json.loads(data)
+        except ValueError:
+            return r.status, data
+
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        st, page = req("GET", "/")
+        check(st == 200 and b"JMC DMX Bridge" in page and b"--acc:#7d4fff" in page, "settings page served (reference-page design)")
+        st, s = req("GET", "/api/state")
+        check(st == 200 and s["app"] == "jmc-dmx-bridge" and not s["running"], "state: stopped")
+        check(req("GET", "/api/state", host="evil.example:%d" % port)[0] == 403, "foreign Host header refused (DNS rebinding)")
+        check(req("POST", "/api/start", {"cfg": s["cfg"]}, token=False)[0] == 403, "change without the app header refused (other websites)")
+        check(not app.bridge, "refused request started nothing")
+        st, r = req("POST", "/api/save", {"cfg": dict(s["cfg"], motors=[dict(s["cfg"]["motors"][0], channel=600)])})
+        check(st == 200 and not r["ok"] and "511" in r["problems"][0], "invalid settings refused with a reason", str(r))
+        st, r = req("POST", "/api/save", {"cfg": dict(s["cfg"], motors=[dict(s["cfg"]["motors"][0], channel="abc")])})
+        check(not r["ok"], "text in a number field refused", str(r))
+        st, r = req("POST", "/api/start", {"cfg": s["cfg"]})
+        check(r["ok"] and app.bridge is not None, "Start from the page", str(r))
+        for _ in range(20):
+            tx.sendto(artnet_packet(0, dmx_with(put16({}, 1, 32768))), ("127.0.0.1", art_port))
+            time.sleep(0.03)
+        check(wait_for(lambda: ctl.pos.get(1) == 500), "page-started bridge moves the motor", str(ctl.pos))
+        st, s = req("GET", "/api/state")
+        row = s["live"]["rows"][0]
+        check(row["dmx"] == 32768 and row["target"] == 500 and row["sent"] == 500, "live row: DMX, target, sent", str(row))
+        check(s["live"]["universes"][0]["universe"] == 0, "incoming universe listed")
+        req("POST", "/api/estop", {})
+        check(req("GET", "/api/state")[1]["live"]["paused"], "STOP from the page pauses")
+        req("POST", "/api/resume", {})
+        check(not req("GET", "/api/state")[1]["live"]["paused"], "Resume from the page")
+        st, s2 = req("GET", "/api/state?since=0")
+        check(any("STOP sent" in l for l in s2["log"]), "log lines delivered to the page")
+        st, s3 = req("GET", "/api/state?since=%d" % s2["log_id"])
+        check(s3["log"] == [], "only new log lines on the next poll")
+        req("POST", "/api/stop", {})
+        check(app.bridge is None and ctl.wd == 0, "Stop bridge from the page")
+        srv2, port2 = jb.start_ui_server(jb.App(path), port)
+        check(srv2 is None and port2 == port, "a second copy finds the running one (single instance)")
+        req("POST", "/api/quit", {})
+        check(app.quit.wait(2), "Quit from the page")
+    finally:
+        app.stop()
+        srv.shutdown()
+        ctl.close()
+        tx.close()
+
+
 if __name__ == "__main__":
     unit_tests()
     live_tests()
     smoothing_test()
+    settings_page_test()
     print("%d passed, %d failed" % (PASS, FAIL))
     raise SystemExit(1 if FAIL else 0)

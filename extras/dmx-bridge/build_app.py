@@ -42,6 +42,9 @@ def main():
             "--name", name, "--windowed",
             "--distpath", dist, "--workpath", work, "--specpath", work,
             "--hidden-import", "serial", "--hidden-import", "serial.tools.list_ports",
+            "--add-data", os.path.join(HERE, "ui.html") + os.pathsep + ".",
+            "--add-data", os.path.join(HERE, "icon.ico") + os.pathsep + ".",
+            "--exclude-module", "tkinter",
             os.path.join(HERE, "jmc_dmx_bridge.py")]
     if mac:
         args[5:5] = ["--osx-bundle-identifier", "com.ailagari.jmcdmxbridge"]
@@ -49,7 +52,7 @@ def main():
         args[5:5] = ["--onefile"]
     icon = os.path.join(HERE, "icon.ico")
     if win and os.path.exists(icon):
-        args[5:5] = ["--icon", icon, "--add-data", icon + os.pathsep + "."]
+        args[5:5] = ["--icon", icon]
     print(" ".join(args))
     subprocess.check_call(args)
 

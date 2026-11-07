@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JMC DMX Bridge</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+/* Same design system as the JMCMotors reference page (docs/index.html) */
+:root{
+  --bg:#ffffff;--bg3:#fbf8f4;--line:#ebe7e1;--txt:#17181c;--muted:#6f6b66;
+  --acc:#7d4fff;--acc-dark:#6236e0;--acc-soft:#f1ecff;--warn:#b07a00;--err:#d13b3b;--ok:#1f8f4e;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  --radius:14px;--shadow:0 1px 2px rgba(20,20,20,.04),0 8px 24px rgba(20,20,20,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:var(--acc-dark);text-decoration:none}a:hover{text-decoration:underline}
+code,.mono{font-family:var(--mono)}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:.05em .4em;font-size:.9em;color:#2b2520}
+h1,h2,h3,h4{line-height:1.15;margin:0 0 .45em;letter-spacing:-.015em}
+h2{font-size:1.35rem;font-weight:800}
+h3{font-size:1.02rem;font-weight:700}
+h4{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+.wrap{max-width:1240px;margin:0 auto;padding:0 20px}
+.eyebrow{display:inline-block;color:var(--acc-dark);font-weight:700;font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+/* header */
+header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:12px;min-height:64px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+.brand{font-weight:800;font-size:1.08rem;display:flex;align-items:center;gap:9px;color:var(--txt);letter-spacing:-.01em;white-space:nowrap}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--acc)}
+.actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;color:var(--txt);border-radius:999px;padding:9px 16px;font:inherit;font-size:.92rem;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}
+.btn:hover{border-color:var(--acc);color:var(--acc-dark);text-decoration:none}
+.btn.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+.btn.primary:hover{background:var(--acc-dark);border-color:var(--acc-dark);color:#fff}
+.btn.danger{background:var(--err);color:#fff;border-color:var(--err);font-weight:800;letter-spacing:.02em}
+.btn.danger:hover{background:#b32f2f;border-color:#b32f2f;color:#fff}
+.btn.small{padding:5px 11px;font-size:.82rem}
+.btn:disabled{opacity:.45;cursor:default;pointer-events:none}
+/* status pill + chips */
+.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:.84rem;font-weight:600;color:var(--muted);background:#fff;white-space:nowrap}
+.pill i{width:8px;height:8px;border-radius:50%;background:#c9c3bb}
+.pill.run{color:var(--ok);border-color:#bfe3cd;background:#f2fbf5}.pill.run i{background:var(--ok);box-shadow:0 0 0 3px rgba(31,143,78,.18)}
+.pill.pause{color:var(--warn);border-color:#ecd9a8;background:#fffaf0}.pill.pause i{background:var(--warn)}
+.pill.bad{color:var(--err);border-color:#f0c4c4;background:#fff6f6}.pill.bad i{background:var(--err)}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 13px;font-size:.84rem;color:var(--muted);background:#fff;font-weight:600;cursor:pointer;user-select:none;transition:.15s}
+.chip input{display:none}
+.chip:hover{border-color:var(--acc)}
+.chip.on{border-color:var(--acc);color:var(--acc-dark);background:var(--acc-soft)}
+.ver{font-family:var(--mono);font-size:.75rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+/* hero band */
+.hero{padding:26px 0 22px;background:linear-gradient(180deg,#f6f2ff 0%,#fff 100%);border-bottom:1px solid var(--line)}
+.hero .lead{color:var(--muted);margin:2px 0 0;max-width:760px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow);min-width:0}
+.kpi b{display:block;font-size:1.25rem;font-weight:800;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi span{color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+/* layout */
+main{padding:22px 0 10px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.card,.panel{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow);min-width:0}
+.card .head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ico{width:34px;height:34px;border-radius:10px;background:var(--acc-soft);color:var(--acc-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-family:var(--mono);font-size:.85rem;flex:none}
+.card h3{margin:0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+.grid3{display:grid;grid-template-columns:1.2fr 1fr;gap:10px 12px}
+.field{display:flex;flex-direction:column;gap:3px;min-width:0}
+label.l{font-size:.74rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+input[type=text],input[type=number],select{background:#fff;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:7px 10px;font:inherit;font-size:.92rem;width:100%;min-width:0}
+input:focus,select:focus{outline:2px solid rgba(125,79,255,.35);border-color:var(--acc)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.hint{color:var(--muted);font-size:.82rem;margin:10px 0 0}
+.note{border-left:3px solid var(--acc);padding:9px 14px;background:var(--bg3);border-radius:0 10px 10px 0;margin:0 0 16px;font-size:.92rem}
+.note.err{border-color:var(--err);background:#fff6f6}
+.note.warn{border-color:var(--warn)}
+.note ul{margin:4px 0 0;padding-left:18px}
+.hidden{display:none!important}
+/* motors table */
+.panel .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.panel .head .row{margin-left:auto}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{border-bottom:1px solid var(--line);padding:6px 3px;text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:700;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+td input[type=number],td select{padding:5px 7px;font-size:.88rem}
+td.n input{width:54px}td.w input{width:80px}td.s select{width:60px}
+td.live{font-family:var(--mono);font-size:.84rem;white-space:nowrap;color:var(--txt)}
+td.live.dim{color:#b5aea6}
+.bar{position:relative;height:8px;border-radius:99px;background:var(--bg3);border:1px solid var(--line);width:90px;overflow:hidden}
+.bar span{position:absolute;inset:0 auto 0 0;background:var(--acc);border-radius:99px;transition:width .12s linear}
+.bar.t span{background:#c9b8ff}
+.posbox{display:flex;flex-direction:column;gap:4px}
+.toggle{width:34px;height:20px;border-radius:99px;background:#ddd7cf;position:relative;cursor:pointer;border:0;flex:none}
+.toggle:after{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.15s}
+.toggle.on{background:var(--acc)}.toggle.on:after{left:17px}
+.x{border:0;background:none;color:#b5aea6;cursor:pointer;font-size:1.1rem;padding:2px 6px;border-radius:6px}
+.x:hover{color:var(--err);background:#fff6f6}
+/* incoming + log */
+.split{display:grid;grid-template-columns:minmax(300px,1fr) 1.6fr;gap:16px;margin-top:16px}
+.split>*{min-width:0}
+.term{background:#1c1a18;color:#eee7df;border-radius:12px;padding:12px 14px;height:260px;overflow:auto;font-family:var(--mono);font-size:.82rem;line-height:1.5;margin-top:8px}
+.term div{white-space:pre-wrap;overflow-wrap:anywhere}
+.term .ev{color:#ffd166}.term .er{color:#ff8a80}.term .ok{color:#9be3b5}.term .sys{color:#9b948c}
+.empty{color:var(--muted);font-size:.9rem;padding:14px 4px}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:6px}
+.lost-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--err);margin-right:6px}
+footer{padding:22px 0 34px;color:var(--muted);font-size:.86rem;border-top:1px solid var(--line);margin-top:20px}
+footer .wrap{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+footer .row{margin-left:auto}
+/* overlay when the app has quit */
+.overlay{position:fixed;inset:0;background:rgba(255,255,255,.92);display:flex;align-items:center;justify-content:center;z-index:50;text-align:center;padding:20px}
+@media (max-width:860px){.split{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}}
+@media (max-width:520px){.grid2{grid-template-columns:1fr}.actions .btn{padding:8px 12px}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>JMC DMX Bridge <span class="ver" id="ver">…</span></div>
+    <span class="pill" id="pill"><i></i><span id="pillText">Stopped</span></span>
+    <div class="actions">
+      <button class="btn primary" id="btnStart">Start</button>
+      <button class="btn" id="btnResume" disabled>Resume</button>
+      <button class="btn danger" id="btnStop" title="Every motor brakes on its ramp (Esc)">STOP MOTORS</button>
+    </div>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Art-Net · sACN → JMC motors</span>
+    <p class="lead">Each motor follows one DMX value from Resolume, MadMapper or a console. Set the controller, pick a universe and channel per motor, press <b>Start</b>.</p>
+    <div class="kpis">
+      <div class="kpi"><span>Controller</span><b id="kController">—</b></div>
+      <div class="kpi"><span>Motors on controller</span><b id="kCount">—</b></div>
+      <div class="kpi"><span>Updates / s</span><b id="kRate">—</b></div>
+      <div class="kpi"><span>Commands</span><b id="kCmds">—</b></div>
+      <div class="kpi"><span>Errors</span><b id="kErr">—</b></div>
+      <div class="kpi"><span>Last reply</span><b id="kReply" class="mono" style="font-size:1rem">—</b></div>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+  <div class="note err hidden" id="problems"></div>
+  <div class="note warn hidden" id="restartNote">Settings changed while running. Press <b>Stop bridge</b>, then <b>Start</b>, to use them.</div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="head"><div class="ico">⇄</div><div><h3>Controller</h3><div class="hint" style="margin:0">The board running the JMCMotors sketch</div></div></div>
+      <div class="row" style="margin-bottom:12px">
+        <label class="chip" data-link="udp"><input type="radio" name="link" value="udp">Network (UDP)</label>
+        <label class="chip" data-link="serial"><input type="radio" name="link" value="serial">USB / COM port</label>
+      </div>
+      <div id="linkUdp" class="grid3">
+        <div class="field" style="grid-column:1/-1"><label class="l" for="ip">Controller IP</label><input type="text" id="ip" placeholder="192.168.1.101"></div>
+        <div class="field"><label class="l" for="port">Controller port</label><input type="number" id="port"></div>
+        <div class="field"><label class="l" for="reply_port">Reply port (PC_PORT)</label><input type="number" id="reply_port"></div>
+      </div>
+      <div id="linkSerial" class="grid3 hidden">
+        <div class="field"><label class="l" for="com_port">COM port</label><input type="text" id="com_port" list="ports" placeholder="COM3"><datalist id="ports"></datalist></div>
+        <div class="field"><label class="l" for="baud">Baud</label><select id="baud"><option>57600</option><option>115200</option><option>38400</option><option>9600</option></select></div>
+      </div>
+      <p class="hint" id="linkHint">Ports match <code>BOARD_UDP_PORT</code> and <code>PC_UDP_PORT</code> in the sketch.</p>
+    </div>
+
+    <div class="card">
+      <div class="head"><div class="ico">◉</div><div><h3>DMX input</h3><div class="hint" style="margin:0">What this PC listens for</div></div></div>
+      <div class="row" style="margin-bottom:12px">
+        <label class="chip" id="chipArt"><input type="checkbox" id="artnet">Art-Net · 6454</label>
+        <label class="chip" id="chipSacn"><input type="checkbox" id="sacn">sACN / E1.31 · 5568</label>
+      </div>
+      <div class="field"><label class="l" for="listen_ip">Listen on IP</label><input type="text" id="listen_ip" placeholder="0.0.0.0"></div>
+      <p class="hint">0.0.0.0 = every network card, also 127.0.0.1. In Resolume set the Lumiverse <b>Target IP</b> to this PC.</p>
+    </div>
+
+    <div class="card">
+      <div class="head"><div class="ico">≈</div><div><h3>Streaming</h3><div class="hint" style="margin:0">How positions go to the motors</div></div></div>
+      <div class="grid2">
+        <div class="field"><label class="l" for="max_rate_hz">Max updates / s</label><input type="number" id="max_rate_hz" min="1" max="200"></div>
+        <div class="field"><label class="l" for="deadband_steps">Deadband (steps)</label><input type="number" id="deadband_steps" min="0"></div>
+        <div class="field"><label class="l" for="smooth_ms">Smoothing (ms)</label><input type="number" id="smooth_ms" min="0" max="5000"></div>
+        <div class="field"><label class="l" for="watchdog_ms">Watchdog (ms)</label><input type="number" id="watchdog_ms" min="0"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><label class="chip" id="chipSend"><input type="checkbox" id="send_settings">Send speed / ramps on start</label></div>
+      <p class="hint">Smoothing 100–200 ms for 8-bit sources (Resolume). Watchdog: motors stop if this app goes quiet; 0 = off.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="head">
+      <div class="ico">M</div>
+      <div><h3>Motors</h3><div class="hint" style="margin:0">16-bit: channel + next channel (0–65535) · 8-bit: one channel (0–255) · swap min / max to reverse</div></div>
+      <div class="row"><button class="btn small" id="btnAdd">+ Add motor</button></div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>On</th><th>Motor</th><th>Universe</th><th>Channel</th><th>Bits</th><th>DMX min</th><th>DMX max</th>
+          <th>Steps min</th><th>Steps max</th><th>Speed rps</th><th>Ramp rps/s</th><th>DMX now</th><th>Target · Sent</th><th>Position</th><th></th>
+        </tr></thead>
+        <tbody id="motors"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="split">
+    <div class="panel">
+      <h4>Incoming DMX</h4>
+      <div id="incoming"><div class="empty">Nothing yet. Press Start, then send DMX. Universes appear here: use these numbers in the motor rows.</div></div>
+    </div>
+    <div class="panel">
+      <div class="row"><h4 style="margin:0">Log</h4><span class="hint" style="margin:0 0 0 auto">controller replies and events</span></div>
+      <div class="term" id="log"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Settings: <code id="path">…</code></span>
+    <a href="https://github.com/ailagari/JMCMotors/blob/main/extras/dmx-bridge/README.md" target="_blank" rel="noopener">Guide</a>
+    <a href="https://ailagari.github.io/JMCMotors/" target="_blank" rel="noopener">Command reference</a>
+    <a href="https://github.com/ailagari/JMCMotors/releases/latest" target="_blank" rel="noopener">Updates</a>
+    <div class="row">
+      <button class="btn small" id="btnSave">Save settings</button>
+      <button class="btn small" id="btnImport">Import…</button>
+      <button class="btn small" id="btnExport">Export</button>
+      <button class="btn small" id="btnQuit">Quit</button>
+      <input type="file" id="file" accept=".json,application/json" class="hidden">
+    </div>
+  </div>
+</footer>
+
+<div class="overlay hidden" id="overlay"><div><h2>JMC DMX Bridge has closed</h2><p class="muted">Start the app again to reconnect. You can close this window.</p></div></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let cfg = null, running = false, paused = false, logId = 0, dirtyWhileRunning = false, fails = 0;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {cache: "no-store"} :
+    {method: "POST", headers: {"Content-Type": "application/json", "X-JMC-Bridge": "1"}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+// ---------- form <-> settings
+const MOTOR_KEYS = ["motor", "universe", "channel", "bits", "dmx_min", "dmx_max", "steps_min", "steps_max", "speed", "accel"];
+function motorRow(m) {
+  const tr = document.createElement("tr");
+  const num = (k, cls, step) => `<td class="${cls}"><input type="number" data-k="${k}" value="${m[k]}" ${step ? 'step="' + step + '"' : ""}></td>`;
+  tr.innerHTML =
+    `<td><button class="toggle ${m.enabled ? "on" : ""}" data-k="enabled" title="Use this row"></button></td>` +
+    num("motor", "n") + num("universe", "n") + num("channel", "n") +
+    `<td class="s"><select data-k="bits"><option value="16">16</option><option value="8">8</option></select></td>` +
+    num("dmx_min", "w") + num("dmx_max", "w") + num("steps_min", "w") + num("steps_max", "w") +
+    num("speed", "n", "0.1") + num("accel", "n", "0.1") +
+    `<td class="live dim" data-live="dmx">—</td><td class="live dim" data-live="ts">—</td>` +
+    `<td><div class="posbox"><div class="bar t" title="Target"><span data-live="tbar" style="width:0"></span></div><div class="bar" title="Sent"><span data-live="sbar" style="width:0"></span></div></div></td>` +
+    `<td><button class="x" title="Remove">×</button></td>`;
+  tr.querySelector('[data-k="bits"]').value = String(m.bits || 16);
+  tr.querySelector(".toggle").onclick = e => { e.currentTarget.classList.toggle("on"); changed(); };
+  tr.querySelector(".x").onclick = () => { tr.remove(); changed(); };
+  tr.querySelector('[data-k="bits"]').onchange = e => {
+    const mx = tr.querySelector('[data-k="dmx_max"]');
+    if (e.target.value === "8" && mx.value === "65535") mx.value = "255";
+    if (e.target.value === "16" && mx.value === "255") mx.value = "65535";
+    changed();
+  };
+  tr.querySelectorAll("input").forEach(i => i.addEventListener("input", changed));
+  return tr;
+}
+function setChip(id, on) { $(id).classList.toggle("on", on); }
+function fill(c) {
+  cfg = c;
+  const ctl = c.controller, inp = c.input, st = c.stream;
+  document.querySelectorAll('input[name=link]').forEach(r => r.checked = r.value === ctl.link);
+  showLink(ctl.link);
+  for (const k of ["ip", "port", "reply_port", "com_port"]) $(k).value = ctl[k];
+  $("baud").value = String(ctl.baud);
+  $("artnet").checked = inp.artnet; $("sacn").checked = inp.sacn; $("listen_ip").value = inp.listen_ip;
+  setChip("chipArt", inp.artnet); setChip("chipSacn", inp.sacn);
+  for (const k of ["max_rate_hz", "deadband_steps", "smooth_ms", "watchdog_ms"]) $(k).value = st[k];
+  $("send_settings").checked = st.send_settings; setChip("chipSend", st.send_settings);
+  const tb = $("motors"); tb.innerHTML = "";
+  c.motors.forEach(m => tb.appendChild(motorRow(m)));
+}
+function gather() {
+  const c = JSON.parse(JSON.stringify(cfg));
+  c.controller.link = document.querySelector('input[name=link]:checked')?.value || "udp";
+  c.controller.ip = $("ip").value.trim(); c.controller.port = +$("port").value; c.controller.reply_port = +$("reply_port").value;
+  c.controller.com_port = $("com_port").value.trim(); c.controller.baud = +$("baud").value;
+  c.input.artnet = $("artnet").checked; c.input.sacn = $("sacn").checked; c.input.listen_ip = $("listen_ip").value.trim() || "0.0.0.0";
+  for (const k of ["max_rate_hz", "deadband_steps", "smooth_ms", "watchdog_ms"]) c.stream[k] = +$(k).value;
+  c.stream.send_settings = $("send_settings").checked;
+  c.motors = [...$("motors").children].map(tr => {
+    const m = {enabled: tr.querySelector(".toggle").classList.contains("on")};
+    for (const k of MOTOR_KEYS) m[k] = +tr.querySelector(`[data-k="${k}"]`).value;
+    return m;
+  });
+  return c;
+}
+function showLink(link) {
+  document.querySelectorAll("[data-link]").forEach(ch => ch.classList.toggle("on", ch.dataset.link === link));
+  $("linkUdp").classList.toggle("hidden", link !== "udp");
+  $("linkSerial").classList.toggle("hidden", link !== "serial");
+  $("linkHint").innerHTML = link === "udp"
+    ? "Ports match <code>BOARD_UDP_PORT</code> and <code>PC_UDP_PORT</code> in the sketch."
+    : "Uno: 57600 baud · other boards: 115200. The sketch uses <code>PC_LINK LINK_USB</code>.";
+}
+function changed() { if (running) { dirtyWhileRunning = true; $("restartNote").classList.remove("hidden"); } }
+function showProblems(list) {
+  const box = $("problems");
+  if (!list || !list.length) { box.classList.add("hidden"); return; }
+  box.innerHTML = "<b>Check the settings:</b><ul>" + list.map(p => "<li>" + esc(p) + "</li>").join("") + "</ul>";
+  box.classList.remove("hidden");
+  window.scrollTo({top: 0, behavior: "smooth"});
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+// ---------- actions
+$("btnStart").onclick = async () => {
+  if (running) { await api("/api/stop", {}); dirtyWhileRunning = false; $("restartNote").classList.add("hidden"); return; }
+  const r = await api("/api/start", {cfg: gather()}); showProblems(r.problems);
+};
+$("btnStop").onclick = () => api("/api/estop", {});
+$("btnResume").onclick = () => api("/api/resume", {});
+$("btnSave").onclick = async () => { const r = await api("/api/save", {cfg: gather()}); showProblems(r.problems); if (r.ok) cfg = gather(); };
+$("btnAdd").onclick = () => {
+  const rows = $("motors").children.length, n = rows + 1;
+  $("motors").appendChild(motorRow({enabled: true, motor: n, universe: 0, channel: 2 * n - 1, bits: 16, dmx_min: 0, dmx_max: 65535,
+    steps_min: 0, steps_max: 4000, speed: 2, accel: 5})); changed();
+};
+$("btnExport").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(gather(), null, 2)], {type: "application/json"}));
+  a.download = "jmc_dmx_bridge.json"; a.click(); URL.revokeObjectURL(a.href);
+};
+$("btnImport").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const c = JSON.parse(await f.text());
+    const r = await api("/api/check", {cfg: c});
+    if (!r.ok) { showProblems(r.problems); return; }
+    const merged = JSON.parse(JSON.stringify(cfg)); Object.assign(merged.controller, c.controller || {});
+    Object.assign(merged.input, c.input || {}); Object.assign(merged.stream, c.stream || {}); merged.motors = c.motors || [];
+    fill(merged); changed(); showProblems([]);
+  } catch (err) { showProblems(["That file is not a bridge settings file (" + err.message + ")"]); }
+  e.target.value = "";
+};
+$("btnQuit").onclick = async () => { if (confirm("Quit JMC DMX Bridge? Streaming stops; motors hold their position.")) { await api("/api/quit", {}); } };
+document.querySelectorAll('input[name=link]').forEach(r => r.onchange = () => { showLink(r.value); changed(); });
+for (const [chip, box] of [["chipArt", "artnet"], ["chipSacn", "sacn"], ["chipSend", "send_settings"]])
+  $(box).addEventListener("change", () => { setChip(chip, $(box).checked); changed(); });
+document.querySelectorAll(".card input, .card select").forEach(i => i.addEventListener("input", changed));
+document.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); api("/api/estop", {}); } });
+
+// ---------- live view
+const fmt = v => v === null || v === undefined ? "—" : Number(v).toLocaleString("en-US").replace(/,/g, " ");
+function pct(v, a, b) { if (v === null || v === undefined || a === b) return 0; const t = (v - a) / (b - a); return Math.max(0, Math.min(1, t)) * 100; }
+function render(s) {
+  $("ver").textContent = "v" + s.version; $("path").textContent = s.settings_path;
+  running = s.running; const live = s.live; paused = !!(live && live.paused);
+  const pill = $("pill"), noCtl = live && !live.controller;
+  pill.className = "pill " + (!running ? "" : paused ? "pause" : noCtl ? "bad" : "run");
+  $("pillText").textContent = !running ? "Stopped" : paused ? "Paused after STOP" : noCtl ? "Controller not answering" : "Streaming";
+  $("btnStart").textContent = running ? "Stop bridge" : "Start";
+  $("btnStart").className = running ? "btn" : "btn primary";
+  $("btnResume").disabled = !paused;
+  if (!running && dirtyWhileRunning) { dirtyWhileRunning = false; $("restartNote").classList.add("hidden"); }
+  const dl = $("ports"); const have = [...dl.options].map(o => o.value).join();
+  if (have !== s.ports.join()) dl.innerHTML = s.ports.map(p => `<option value="${esc(p)}">`).join("");
+  if (live) {
+    const st = live.stats;
+    const m = /^JMCMotors (\S+)/.exec(live.controller || "");
+    $("kController").textContent = m ? "v" + m[1] : live.controller ? "unknown device" : "not answering";
+    $("kController").title = live.controller || "";
+    $("kCount").textContent = live.count ?? "?";
+    $("kRate").textContent = st.rate.toFixed(0); $("kCmds").textContent = fmt(st.commands); $("kErr").textContent = st.errors;
+    $("kReply").textContent = st.last_reply || "—";
+    $("kErr").style.color = st.errors ? "var(--err)" : "";
+  } else {
+    for (const k of ["kController", "kCount", "kRate", "kCmds", "kErr", "kReply"]) $(k).textContent = "—";
+    $("kErr").style.color = "";
+  }
+  const rows = [...$("motors").children];
+  rows.forEach((tr, i) => {
+    const r = live && !dirtyWhileRunning ? live.rows[i] : null;
+    const get = k => +tr.querySelector(`[data-k="${k}"]`).value;
+    const dmx = tr.querySelector('[data-live="dmx"]'), ts = tr.querySelector('[data-live="ts"]');
+    dmx.textContent = r ? fmt(r.dmx) : "—"; dmx.classList.toggle("dim", !r || r.dmx === null);
+    ts.textContent = r ? fmt(r.target) + " · " + fmt(r.sent) : "—"; ts.classList.toggle("dim", !r || r.target === null);
+    const a = get("steps_min"), b = get("steps_max");
+    tr.querySelector('[data-live="tbar"]').style.width = pct(r && r.target, a, b) + "%";
+    tr.querySelector('[data-live="sbar"]').style.width = pct(r && r.sent, a, b) + "%";
+  });
+  const inc = $("incoming");
+  if (live && live.universes.length) {
+    inc.innerHTML = '<div class="tbl-wrap"><table><thead><tr><th>Protocol</th><th>Universe</th><th>From</th><th>Packets</th><th>State</th></tr></thead><tbody>' +
+      live.universes.map(u => `<tr><td>${esc(u.proto)}</td><td class="mono"><b>${u.universe}</b></td><td class="mono">${esc(u.src)}</td><td class="mono">${fmt(u.count)}</td>` +
+        `<td>${u.age < 2 ? '<span class="live-dot"></span>live' : '<span class="lost-dot"></span>lost ' + Math.round(u.age) + " s"}</td></tr>`).join("") + "</tbody></table></div>";
+  } else if (running) {
+    inc.innerHTML = '<div class="empty">Listening… no DMX has arrived yet. Check Resolume\'s Target IP and the firewall.</div>';
+  }
+  if (s.log.length) {
+    const box = $("log"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    for (const line of s.log) {
+      const d = document.createElement("div");
+      d.className = /ERR|WARNING|not accepted|no reply|Could not/i.test(line) ? "er" : /EVENT:/.test(line) ? "ev" :
+                    /STOP|Streaming resumed|stopped/i.test(line) ? "sys" : /Controller: JMCMotors/.test(line) ? "ok" : "";
+      d.textContent = line; box.appendChild(d);
+    }
+    while (box.children.length > 500) box.firstChild.remove();
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  }
+  logId = s.log_id;
+}
+async function poll() {
+  try {
+    const s = await api("/api/state?since=" + logId);
+    if (!cfg) fill(s.cfg);
+    render(s); fails = 0; $("overlay").classList.add("hidden");
+  } catch (e) {
+    if (++fails >= 3) $("overlay").classList.remove("hidden");
+  }
+  setTimeout(poll, 250);
+}
+poll();
+</script>
+</body>
+</html>

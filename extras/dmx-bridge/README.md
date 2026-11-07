@@ -44,7 +44,7 @@ Use the app and library with the **same version number** (e.g. both 0.6.0). The 
 | macOS (Apple Silicon) | `JMC-DMX-Bridge-<version>-macos-arm64.zip` | unzip, move `JMC DMX Bridge.app` to Applications. The first time, **right-click → Open** (it isn't notarised) |
 | Linux (x64) | `JMC-DMX-Bridge-<version>-linux-x64.zip` | unzip, `chmod +x JMC-DMX-Bridge`, then `./JMC-DMX-Bridge` |
 
-The app includes everything, including USB/COM-port support. **Settings** are saved in `jmc_dmx_bridge.json` next to the app (Windows / Linux, so a USB stick works as a portable setup) or in `~/Library/Application Support/JMC DMX Bridge` (macOS). Messages in headless mode go to `jmc_dmx_bridge.log` in the same place.
+The app includes everything, including USB/COM-port support. It opens **its own window**, in the same design as the [JMCMotors reference page](https://ailagari.github.io/JMCMotors/). The window is drawn by the Edge or Chrome already on the computer (built into Windows 10/11), in app mode: no tabs, no address bar. **Closing the window quits the app**, and the motors hold their position. Double-clicking the app again while it runs brings its window back. With no Edge, Chrome, Chromium or Brave installed, the page opens in your normal browser; then use **Quit** at the bottom of the page to end the app. The page is only reachable from this computer (`127.0.0.1`), never from the network. **Settings** are saved in `jmc_dmx_bridge.json` next to the app (Windows / Linux, so a USB stick works as a portable setup) or in `~/Library/Application Support/JMC DMX Bridge` (macOS). Messages in headless mode go to `jmc_dmx_bridge.log` in the same place.
 
 <details><summary>Run from source instead (Intel Mac, other systems, developers)</summary>
 
@@ -78,7 +78,7 @@ Open **JMC DMX Bridge** (or, from source, `start_bridge.bat` / `python jmc_dmx_b
 
 > **Windows Firewall:** the first time, Windows asks whether JMC-DMX-Bridge (or Python, from source) may use the network. Tick **Private networks** and click **Allow**. If you miss it, no DMX and no controller replies get through. To fix it, go to Windows Security > Firewall > "Allow an app through firewall" and tick it. macOS asks the same ("accept incoming network connections"): click **Allow**.
 
-Fill in the window:
+Fill in the window, top to bottom:
 
 1. **Controller:** pick Network (UDP). Enter the controller's IP (`BOARD_IP_ADDR`), Controller port `8001` and Reply port `8000`.
 2. **DMX input:** tick Art-Net, sACN or both. Leave Listen on IP as `0.0.0.0`.
@@ -180,9 +180,9 @@ Menu names vary between versions; the idea is the same everywhere:
 | Watchdog ms | 1000 | the controller stops every motor if the bridge goes quiet this long; the bridge sends `PING` to keep it alive. 0 = off |
 | Send speed / ramps on start | on | writes each row's Speed and Ramp to the controller when you press Start |
 
-Settings are saved to `jmc_dmx_bridge.json` next to the program. **Open settings…** loads another file, so you can keep one file per show.
+**Save settings** writes `jmc_dmx_bridge.json` (Start saves too). **Export** downloads the current settings as a file and **Import…** loads one, so you can keep one file per show.
 
-**Without the window** (a show PC, a service): run `JMC-DMX-Bridge.exe --headless` (or `python jmc_dmx_bridge.py --headless`). The first run writes a default `jmc_dmx_bridge.json`; edit it, then run again. Use `--config show2.json` for another file, and `--version` to show the version.
+**Without the window** (a show PC, a service): run `JMC-DMX-Bridge.exe --headless` (or `python jmc_dmx_bridge.py --headless`). It starts streaming with the saved settings at once. The first run writes a default `jmc_dmx_bridge.json`; edit it, then run again. While it runs, its page is still at `http://127.0.0.1:8090` on that PC for monitoring. Use `--config show2.json` for another file, `--ui-port` for another page port, and `--version` to show the version.
 
 ---
 
@@ -209,7 +209,7 @@ Settings are saved to `jmc_dmx_bridge.json` next to the program. **Open settings
 
 | Symptom | Check |
 |---|---|
-| *controller not answering* | Ping the controller IP. Is the Controller port 8001 and the Reply port the sketch's `PC_UDP_PORT`? Is Python allowed through the Windows Firewall? Is the PC on the same subnet? |
+| *controller not answering* | Ping the controller IP. Is the Controller port 8001 and the Reply port the sketch's `PC_UDP_PORT`? Is the app allowed through the Windows Firewall? Is the PC on the same subnet? |
 | Incoming DMX list stays empty | Firewall (as above). Is Resolume's Target IP this PC? Is the right network card picked in Resolume's DMX preferences? Another program on port 6454? Try sACN or `127.0.0.1` |
 | "Could not start … port" | Another bridge, or a program that receives Art-Net/sACN (Resolume's DMX input, a visualiser), holds the port. Close it or switch protocol |
 | Universe arrives with a different number | Use the number shown in Incoming DMX (section 5) |
@@ -224,4 +224,4 @@ Settings are saved to `jmc_dmx_bridge.json` next to the program. **Open settings
 
 ## 10. Test without hardware
 
-`python test_bridge.py` checks the packet parsing and the mapping. It then runs the bridge against a simulated controller on this PC with real Art-Net and sACN packets: start-up, 8/16-bit, all-motor updates, deadband, rate limit under flooding, keepalive, lost source, STOP, error recovery and smoothing.
+`python test_bridge.py` checks the packet parsing and the mapping. It then runs the bridge against a simulated controller on this PC with real Art-Net and sACN packets: start-up, 8/16-bit, all-motor updates, deadband, rate limit under flooding, keepalive, lost source, STOP, error recovery and smoothing. Last, it tests the settings page: every button's API, and that requests from another website or a foreign host name are refused.

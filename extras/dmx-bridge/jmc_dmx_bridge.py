@@ -12,7 +12,7 @@ Ready-made apps (Windows .exe, macOS .app, Linux) are on the GitHub Releases
 page, built from this file - no Python needed. From source:
 
     python jmc_dmx_bridge.py                       settings window
-    python jmc_dmx_bridge.py --headless            no window, settings file only
+    python jmc_dmx_bridge.py --headless            no window: stream with the saved settings
     python jmc_dmx_bridge.py --config other.json   another settings file
 
 Needs Python 3.8+ (standard library only). The USB / COM-port connection
@@ -23,16 +23,24 @@ Guide: extras/dmx-bridge/README.md
 """
 
 import argparse
+import collections
 import json
 import math
 import os
 import queue
 import select
+import shutil
 import socket
+import socketserver
 import struct
+import subprocess
 import sys
 import threading
 import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
 
 VERSION = "0.6.0"            # released together with the JMCMotors library of the same version
 MIN_FIRMWARE = (0, 6, 0)     # oldest controller firmware the bridge works with (MC:?, WD, PING)
@@ -590,266 +598,6 @@ class Bridge:
                     "dmx": {u: d.get("data", b"") for u, d in self.universes.items()}}
 
 
-# --------------------------------------------------------------------------- settings window
-def run_gui(path):
-    import tkinter as tk
-    from tkinter import ttk, messagebox, filedialog
-
-    cfg = load_config(path)
-    state = {"bridge": None, "path": path}
-    root = tk.Tk()
-    root.title("JMC DMX Bridge %s" % VERSION)
-    try:                                   # window / taskbar icon (Windows)
-        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        root.iconbitmap(os.path.join(base, "icon.ico"))
-    except Exception:
-        pass
-    root.minsize(980, 640)
-
-    def var(value):
-        return tk.StringVar(value=str(value))
-
-    # ---- controller / input / stream settings
-    top = ttk.Frame(root, padding=8)
-    top.pack(fill="x")
-    c, i, st = cfg["controller"], cfg["input"], cfg["stream"]
-    v = {
-        "link": tk.StringVar(value=c["link"]), "ip": var(c["ip"]), "port": var(c["port"]),
-        "reply_port": var(c["reply_port"]), "com_port": var(c["com_port"]), "baud": var(c["baud"]),
-        "artnet": tk.BooleanVar(value=i["artnet"]), "sacn": tk.BooleanVar(value=i["sacn"]),
-        "listen_ip": var(i["listen_ip"]), "max_rate_hz": var(st["max_rate_hz"]),
-        "deadband_steps": var(st["deadband_steps"]), "watchdog_ms": var(st["watchdog_ms"]),
-        "smooth_ms": var(st["smooth_ms"]), "send_settings": tk.BooleanVar(value=st["send_settings"]),
-    }
-    box = ttk.LabelFrame(top, text="Controller", padding=6)
-    box.grid(row=0, column=0, sticky="nsew", padx=4)
-    ttk.Radiobutton(box, text="Network (UDP)", variable=v["link"], value="udp").grid(row=0, column=0, sticky="w")
-    ttk.Radiobutton(box, text="USB / COM port", variable=v["link"], value="serial").grid(row=0, column=1, sticky="w")
-    for r, (lab, key) in enumerate([("Controller IP", "ip"), ("Controller port", "port"), ("Reply port (PC_PORT)", "reply_port")], 1):
-        ttk.Label(box, text=lab).grid(row=r, column=0, sticky="w")
-        ttk.Entry(box, textvariable=v[key], width=16).grid(row=r, column=1, sticky="w")
-    ttk.Label(box, text="COM port / baud").grid(row=4, column=0, sticky="w")
-    f = ttk.Frame(box); f.grid(row=4, column=1, sticky="w")
-    try:                                   # offer the serial ports that exist (pyserial)
-        from serial.tools import list_ports
-        ports = sorted(p.device for p in list_ports.comports())
-    except Exception:
-        ports = []
-    ttk.Combobox(f, textvariable=v["com_port"], values=ports, width=12).pack(side="left")
-    ttk.Entry(f, textvariable=v["baud"], width=7).pack(side="left", padx=4)
-
-    box = ttk.LabelFrame(top, text="DMX input", padding=6)
-    box.grid(row=0, column=1, sticky="nsew", padx=4)
-    ttk.Checkbutton(box, text="Art-Net (port 6454)", variable=v["artnet"]).grid(row=0, column=0, sticky="w")
-    ttk.Checkbutton(box, text="sACN / E1.31 (port 5568)", variable=v["sacn"]).grid(row=1, column=0, sticky="w")
-    ttk.Label(box, text="Listen on IP (0.0.0.0 = all)").grid(row=2, column=0, sticky="w")
-    ttk.Entry(box, textvariable=v["listen_ip"], width=16).grid(row=3, column=0, sticky="w")
-
-    box = ttk.LabelFrame(top, text="Streaming", padding=6)
-    box.grid(row=0, column=2, sticky="nsew", padx=4)
-    for r, (lab, key) in enumerate([("Max updates / s", "max_rate_hz"), ("Deadband (steps)", "deadband_steps"),
-                                    ("Smoothing ms (0 = off)", "smooth_ms"), ("Watchdog ms (0 = off)", "watchdog_ms")]):
-        ttk.Label(box, text=lab).grid(row=r, column=0, sticky="w")
-        ttk.Entry(box, textvariable=v[key], width=8).grid(row=r, column=1, sticky="w")
-    ttk.Checkbutton(box, text="Send speed / ramps on start", variable=v["send_settings"]).grid(row=4, column=0, columnspan=2, sticky="w")
-
-    btns = ttk.Frame(top, padding=(4, 0))
-    btns.grid(row=0, column=3, sticky="nsew")
-    start_btn = ttk.Button(btns, text="Start")
-    start_btn.pack(fill="x", pady=2)
-    stop_btn = tk.Button(btns, text="STOP MOTORS", bg="#c62828", fg="white", font=("Segoe UI", 11, "bold"))
-    stop_btn.pack(fill="x", pady=2)
-    resume_btn = ttk.Button(btns, text="Resume", command=lambda: state["bridge"] and state["bridge"].resume())
-    resume_btn.pack(fill="x", pady=2)
-    ttk.Button(btns, text="Save settings", command=lambda: do_save()).pack(fill="x", pady=2)
-    ttk.Button(btns, text="Open settings…", command=lambda: do_open()).pack(fill="x", pady=2)
-
-    # ---- motor table
-    mid = ttk.LabelFrame(root, text="Motors - one DMX value each (16-bit: channel + next channel; 8-bit: one channel)", padding=6)
-    mid.pack(fill="both", expand=True, padx=8)
-    cols = [("On", 4), ("Motor", 6), ("Universe", 8), ("Channel", 8), ("Bits", 5), ("DMX min", 8), ("DMX max", 8),
-            ("Steps min", 10), ("Steps max", 10), ("Speed rps", 9), ("Ramp rps/s", 9), ("DMX now", 9), ("Target", 10), ("Sent", 10)]
-    canvas = tk.Canvas(mid, highlightthickness=0, height=230)
-    sb = ttk.Scrollbar(mid, orient="vertical", command=canvas.yview)
-    table = ttk.Frame(canvas)
-    table.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-    canvas.create_window((0, 0), window=table, anchor="nw")
-    canvas.configure(yscrollcommand=sb.set)
-    canvas.pack(side="left", fill="both", expand=True)
-    sb.pack(side="right", fill="y")
-    rows = []
-    keys = ["motor", "universe", "channel", "bits", "dmx_min", "dmx_max", "steps_min", "steps_max", "speed", "accel"]
-
-    def header():
-        for col, (name, w) in enumerate(cols):
-            ttk.Label(table, text=name, width=w, anchor="w", font=("Segoe UI", 9, "bold")).grid(row=0, column=col, padx=1)
-
-    def add_row(m):
-        r = len(rows) + 1
-        row = {"enabled": tk.BooleanVar(value=m["enabled"])}
-        ttk.Checkbutton(table, variable=row["enabled"]).grid(row=r, column=0)
-        for col, k in enumerate(keys, 1):
-            row[k] = var(m.get(k, 16) if k == "bits" else m[k])
-            if k == "bits":
-                ttk.Combobox(table, textvariable=row[k], values=("16", "8"), width=3,
-                             state="readonly").grid(row=r, column=col, padx=1, pady=1)
-            else:
-                ttk.Entry(table, textvariable=row[k], width=cols[col][1]).grid(row=r, column=col, padx=1, pady=1)
-
-        def bits_changed(*_):                  # keep DMX max in range when switching 8 / 16 bit
-            mx = row["dmx_max"].get().strip()
-            if row["bits"].get() == "8" and mx == "65535":
-                row["dmx_max"].set("255")
-            elif row["bits"].get() == "16" and mx == "255":
-                row["dmx_max"].set("65535")
-        row["bits"].trace_add("write", bits_changed)
-        for col, k in enumerate(["dmx_now", "target", "sent"], len(keys) + 1):
-            row[k] = tk.StringVar(value="-")
-            ttk.Label(table, textvariable=row[k], width=cols[col][1]).grid(row=r, column=col)
-        row["widgets"] = table.grid_slaves(row=r)
-        rows.append(row)
-
-    def remove_row():
-        if rows:
-            for w in rows.pop()["widgets"]:
-                w.destroy()
-
-    header()
-    for m in cfg["motors"]:
-        add_row(m)
-    tb = ttk.Frame(root, padding=(8, 2))
-    tb.pack(fill="x")
-    ttk.Button(tb, text="Add motor", command=lambda: add_row(default_motor(len(rows) + 1))).pack(side="left")
-    ttk.Button(tb, text="Remove last", command=remove_row).pack(side="left", padx=4)
-    ttk.Label(tb, text="Swap min and max to reverse a direction. Speed: how fast a motor may follow the DMX value.").pack(side="left", padx=12)
-
-    # ---- incoming + log
-    bottom = ttk.Frame(root, padding=8)
-    bottom.pack(fill="both", expand=True)
-    inc = ttk.LabelFrame(bottom, text="Incoming DMX (use these universe numbers)", padding=4)
-    inc.pack(side="left", fill="y")
-    inc_list = tk.Listbox(inc, width=44, height=10, font=("Consolas", 9))
-    inc_list.pack(fill="y", expand=True)
-    lg = ttk.LabelFrame(bottom, text="Log - controller replies and events", padding=4)
-    lg.pack(side="left", fill="both", expand=True, padx=(8, 0))
-    log_box = tk.Text(lg, height=10, font=("Consolas", 9), state="disabled")
-    log_box.pack(fill="both", expand=True)
-    status = tk.StringVar(value="Stopped")
-    ttk.Label(root, textvariable=status, relief="sunken", anchor="w", padding=4).pack(fill="x", side="bottom")
-    log_q = queue.Queue()
-
-    def log(msg):
-        log_q.put(time.strftime("%H:%M:%S ") + msg)
-
-    def gather():
-        out = default_config()
-        out["controller"] = {"link": v["link"].get(), "ip": v["ip"].get().strip(), "port": int(v["port"].get()),
-                             "reply_port": int(v["reply_port"].get()), "com_port": v["com_port"].get().strip(),
-                             "baud": int(v["baud"].get())}
-        out["input"] = {"artnet": v["artnet"].get(), "sacn": v["sacn"].get(), "listen_ip": v["listen_ip"].get().strip(),
-                        "artnet_port": cfg["input"].get("artnet_port", ARTNET_PORT),
-                        "sacn_port": cfg["input"].get("sacn_port", SACN_PORT)}
-        out["stream"] = {"max_rate_hz": float(v["max_rate_hz"].get()), "deadband_steps": int(v["deadband_steps"].get()),
-                         "smooth_ms": float(v["smooth_ms"].get()), "watchdog_ms": int(v["watchdog_ms"].get()), "send_settings": v["send_settings"].get(),
-                         "source_timeout_s": cfg["stream"].get("source_timeout_s", 2.0)}
-        motors = []
-        for row in rows:
-            m = {"enabled": row["enabled"].get()}
-            for k in keys:
-                m[k] = float(row[k].get()) if k in ("speed", "accel") else int(float(row[k].get()))
-            motors.append(m)
-        out["motors"] = motors
-        problems = check_config(out)
-        if problems:
-            raise ValueError("\n".join(problems))
-        return out
-
-    def do_save():
-        try:
-            save_config(state["path"], gather())
-            log("Settings saved to " + state["path"])
-        except ValueError as e:
-            messagebox.showerror("Settings", str(e))
-
-    def do_open():
-        p = filedialog.askopenfilename(filetypes=[("Settings", "*.json")])
-        if p:
-            if state["bridge"]:
-                toggle()
-            root.destroy()
-            run_gui(p)
-
-    def toggle():
-        if state["bridge"]:
-            state["bridge"].stop()
-            state["bridge"] = None
-            start_btn.configure(text="Start")
-            status.set("Stopped")
-            return
-        try:
-            new = gather()
-        except ValueError as e:
-            messagebox.showerror("Settings", str(e))
-            return
-        cfg.update(new)
-        b = Bridge(cfg, log)
-        try:
-            b.start()
-        except (OSError, RuntimeError) as e:
-            messagebox.showerror("Start", "Could not start: %s\n\nIs another program (or a second bridge) using the port?" % e)
-            b.stop()
-            return
-        state["bridge"] = b
-        start_btn.configure(text="Stop bridge")
-
-    start_btn.configure(command=toggle)
-    stop_btn.configure(command=lambda: state["bridge"].emergency_stop() if state["bridge"] else None)
-
-    def tick():
-        while not log_q.empty():
-            line = log_q.get_nowait()
-            log_box.configure(state="normal")
-            log_box.insert("end", line + "\n")
-            if int(log_box.index("end-1c").split(".")[0]) > 400:
-                log_box.delete("1.0", "100.0")
-            log_box.see("end")
-            log_box.configure(state="disabled")
-        b = state["bridge"]
-        if b:
-            snap = b.snapshot()
-            inc_list.delete(0, "end")
-            for u, proto, src, age, count in snap["universes"]:
-                inc_list.insert("end", "%-7s universe %-5d from %-15s %s" %
-                                (proto, u, src, "live" if age < 2 else "lost %.0fs" % age))
-            for row in rows:
-                try:
-                    n, u, ch = int(row["motor"].get()), int(row["universe"].get()), int(row["channel"].get())
-                    bits = int(row["bits"].get())
-                except ValueError:
-                    continue
-                data = snap["dmx"].get(u)
-                row["dmx_now"].set(str(read_value(data, ch, bits)) if data else "-")
-                row["target"].set(str(snap["targets"].get(n, "-")))
-                row["sent"].set(str(snap["sent"].get(n, "-")))
-            s = snap["stats"]
-            status.set(("PAUSED after STOP - press Resume | " if snap["paused"] else "Running - ") + "%s | motors on controller: %s | %.0f updates/s | commands %d, errors %d | last reply: %s" %
-                       (snap["version"] or "controller not answering", snap["count"] or "?", s["rate"],
-                        s["commands"], s["errors"], s["last_reply"]))
-        root.after(100, tick)
-
-    def on_close():
-        if state["bridge"]:
-            state["bridge"].stop()
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", on_close)
-    root.bind("<Escape>", lambda e: state["bridge"] and state["bridge"].emergency_stop())
-    log("JMC DMX Bridge %s - settings: %s" % (VERSION, state["path"]))
-    log("Press Start, then send DMX from Resolume / MadMapper. Esc or STOP MOTORS = stop every motor.")
-    tick()
-    root.mainloop()
-
-
 def check_config(cfg):
     """Readable problems with the settings, or []."""
     p = []
@@ -895,24 +643,340 @@ def check_config(cfg):
     return p
 
 
-def run_headless(path):
-    cfg = load_config(path)
-    if not os.path.exists(path):
-        save_config(path, cfg)
-        print("Wrote default settings to %s - edit it, then start again." % path)
-        return
-    problems = check_config(cfg)
-    if problems:
-        print("Settings problems:\n  " + "\n  ".join(problems))
-        sys.exit(1)
-    b = Bridge(cfg, lambda m: print(time.strftime("%H:%M:%S ") + m, flush=True))
-    b.start()
-    print("Running - Ctrl+C to stop.", flush=True)
+# --------------------------------------------------------------------------- app: settings page (local web UI)
+UI_PORT = 8090
+APP_ID = "jmc-dmx-bridge"
+
+
+def asset(name):
+    """A file shipped with the program (inside the packaged app, or next to this file)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def serial_ports():
     try:
-        while True:
-            time.sleep(1)
+        from serial.tools import list_ports
+        return sorted(p.device for p in list_ports.comports())
+    except Exception:
+        return []
+
+
+def normalize_config(raw):
+    """Settings from the page or a file -> (clean settings, problems)."""
+    problems = []
+    try:
+        cfg = merge(default_config(), raw if isinstance(raw, dict) else {})
+        motors = raw.get("motors", []) if isinstance(raw, dict) else []
+        cfg["motors"] = []
+        for i, m in enumerate(motors if isinstance(motors, list) else [], 1):
+            m = merge(default_motor(i), m if isinstance(m, dict) else {})
+            try:
+                for k in ("motor", "universe", "channel", "bits", "dmx_min", "dmx_max", "steps_min", "steps_max"):
+                    m[k] = int(float(m[k]))
+                for k in ("speed", "accel"):
+                    m[k] = float(m[k])
+                m["enabled"] = bool(m.get("enabled", True))
+            except (TypeError, ValueError):
+                problems.append("Row %d: every field must be a number" % i)
+            cfg["motors"].append(m)
+        c, st = cfg["controller"], cfg["stream"]
+        c["port"], c["reply_port"], c["baud"] = int(c["port"]), int(c["reply_port"]), int(c["baud"])
+        for k in ("max_rate_hz", "smooth_ms", "source_timeout_s"):
+            st[k] = float(st[k])
+        st["deadband_steps"], st["watchdog_ms"] = int(float(st["deadband_steps"])), int(float(st["watchdog_ms"]))
+        for k in ("artnet", "sacn"):
+            cfg["input"][k] = bool(cfg["input"][k])
+        st["send_settings"] = bool(st["send_settings"])
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return default_config(), ["Settings are not valid - check the numbers"]
+    if not problems:
+        problems = check_config(cfg)
+    return cfg, problems
+
+
+class App:
+    """Settings, the running bridge and the log - shared by the page and headless mode."""
+
+    def __init__(self, path, echo=False):
+        self.path = path
+        self.cfg, _ = normalize_config(load_config(path))
+        self.bridge = None
+        self.lock = threading.Lock()
+        self.logs = collections.deque(maxlen=600)
+        self.log_id = 0
+        self.echo = echo
+        self.quit = threading.Event()
+
+    def log(self, msg):
+        line = time.strftime("%H:%M:%S ") + msg
+        with self.lock:
+            self.log_id += 1
+            self.logs.append((self.log_id, line))
+        if self.echo:
+            print(line, flush=True)
+
+    def state(self, since=0):
+        with self.lock:
+            logs = [l for i, l in self.logs if i > since]
+            last = self.log_id
+        out = {"app": APP_ID, "version": VERSION, "settings_path": self.path, "cfg": self.cfg,
+               "running": self.bridge is not None, "ports": serial_ports(), "log": logs, "log_id": last}
+        b = self.bridge
+        if b:
+            s = b.snapshot()
+            rows = []
+            for m in b.cfg["motors"]:
+                data = s["dmx"].get(int(m["universe"]))
+                n = int(m["motor"])
+                rows.append({"dmx": read_value(data, int(m["channel"]), m.get("bits", 16)) if data else None,
+                             "target": s["targets"].get(n), "sent": s["sent"].get(n)})
+            out["live"] = {"rows": rows, "paused": s["paused"], "stats": s["stats"], "controller": s["version"],
+                           "count": s["count"],
+                           "universes": [{"universe": u, "proto": p, "src": src, "age": round(age, 1), "count": c}
+                                         for u, p, src, age, c in s["universes"]]}
+        return out
+
+    def save(self, raw):
+        cfg, problems = normalize_config(raw)
+        if problems:
+            return problems
+        save_config(self.path, cfg)
+        self.cfg = cfg
+        self.log("Settings saved to " + self.path)
+        return []
+
+    def start(self, raw=None):
+        if self.bridge:
+            return ["The bridge is already running"]
+        problems = self.save(raw) if raw is not None else check_config(self.cfg)
+        if problems:
+            return problems
+        b = Bridge(json.loads(json.dumps(self.cfg)), self.log)
+        try:
+            b.start()
+        except (OSError, RuntimeError) as e:
+            b.stop()
+            msg = "Could not start: %s - is another program (or a second bridge) using the port?" % e
+            self.log(msg)
+            return [msg]
+        self.bridge = b
+        return []
+
+    def stop(self):
+        b, self.bridge = self.bridge, None
+        if b:
+            b.stop()
+
+    def estop(self):
+        if self.bridge:
+            self.bridge.emergency_stop()
+        else:
+            self.log("STOP: the bridge is not running (nothing was streaming)")
+
+    def resume(self):
+        if self.bridge:
+            self.bridge.resume()
+
+
+class UiHandler(BaseHTTPRequestHandler):
+    """The settings page and its JSON API. Only answers this PC (127.0.0.1), checks
+    the Host header (no DNS rebinding) and needs a custom header on every change
+    (another web page cannot send it), so no website can drive the motors."""
+    app = None
+    port = 0
+    server_version = "JMCDMXBridge"
+
+    def log_message(self, *args):
+        pass
+
+    def _host_ok(self):
+        h = (self.headers.get("Host") or "").lower()
+        return h in ("127.0.0.1:%d" % self.port, "localhost:%d" % self.port)
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, {"error": "forbidden"})
+        url = urlparse(self.path)
+        if url.path in ("/", "/index.html"):
+            with open(asset("ui.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if url.path == "/favicon.ico" and os.path.exists(asset("icon.ico")):
+            with open(asset("icon.ico"), "rb") as f:
+                return self._send(200, f.read(), "image/x-icon")
+        if url.path == "/api/ping":
+            return self._send(200, {"app": APP_ID, "version": VERSION})
+        if url.path == "/api/state":
+            try:
+                since = int(parse_qs(url.query).get("since", ["0"])[0])
+            except ValueError:
+                since = 0
+            return self._send(200, self.app.state(since))
+        return self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._host_ok() or self.headers.get("X-JMC-Bridge") != "1":
+            return self._send(403, {"error": "forbidden"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 1000000:
+                return self._send(413, {"error": "too large"})
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            return self._send(400, {"error": "bad JSON"})
+        a, path = self.app, urlparse(self.path).path
+        if path == "/api/save":
+            problems = a.save(body.get("cfg"))
+        elif path == "/api/start":
+            problems = a.start(body.get("cfg"))
+        elif path == "/api/stop":
+            a.stop()
+            problems = []
+        elif path == "/api/estop":
+            a.estop()
+            problems = []
+        elif path == "/api/resume":
+            a.resume()
+            problems = []
+        elif path == "/api/check":
+            problems = normalize_config(body.get("cfg"))[1]
+        elif path == "/api/quit":
+            self._send(200, {"ok": True, "problems": []})
+            a.quit.set()
+            return None
+        else:
+            return self._send(404, {"error": "not found"})
+        return self._send(200, {"ok": not problems, "problems": problems})
+
+
+class UiServer(ThreadingHTTPServer):
+    """Local page server. The port is exclusive (Windows would otherwise let a
+    second copy bind the same port), and no slow host-name lookup at start."""
+    daemon_threads = True
+    allow_reuse_address = not sys.platform.startswith("win")
+
+    def server_bind(self):
+        if sys.platform.startswith("win") and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+def ping_ui(port):
+    """True if a JMC DMX Bridge already serves its page on this port."""
+    try:
+        with urlopen("http://127.0.0.1:%d/api/ping" % port, timeout=1.0) as r:
+            return json.loads(r.read().decode()).get("app") == APP_ID
+    except Exception:
+        return False
+
+
+def start_ui_server(app, port):
+    """-> (server, port), or (None, port) when another bridge already serves its page there."""
+    for p in range(port, port + 10):
+        handler = type("Handler", (UiHandler,), {"app": app, "port": p})
+        try:
+            srv = UiServer(("127.0.0.1", p), handler)
+        except OSError:
+            if ping_ui(p):
+                return None, p
+            continue
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv, p
+    raise RuntimeError("no free port for the settings page (%d..%d)" % (port, port + 9))
+
+
+def find_app_browser():
+    """A Chromium browser that can open the page as an app window (no tabs or address bar)."""
+    cands = []
+    if sys.platform.startswith("win"):
+        for env in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+            base = os.environ.get(env)
+            if base:
+                cands += [os.path.join(base, r"Microsoft\Edge\Application\msedge.exe"),
+                          os.path.join(base, r"Google\Chrome\Application\chrome.exe"),
+                          os.path.join(base, r"BraveSoftware\Brave-Browser\Application\brave.exe")]
+    elif sys.platform == "darwin":
+        cands = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                 "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                 "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"]
+    else:
+        cands = [shutil.which(n) for n in ("google-chrome", "chromium", "chromium-browser",
+                                           "microsoft-edge", "brave-browser")]
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+def open_window(url):
+    """Open the page in its own app window. Returns the window's process, or None
+    when it opened in the normal browser (then the page's Quit button ends the app)."""
+    exe = find_app_browser()
+    if exe:
+        profile = os.path.join(settings_dir(), "window")
+        try:
+            return subprocess.Popen([exe, "--app=" + url, "--user-data-dir=" + profile,
+                                     "--window-size=1320,900", "--no-first-run",
+                                     "--no-default-browser-check", "--disable-features=Translate"])
+        except OSError:
+            pass
+    webbrowser.open(url)
+    return None
+
+
+def run_app(path, headless=False, port=UI_PORT):
+    app = App(path, echo=headless)
+    if headless and not os.path.exists(path):
+        save_config(path, app.cfg)
+        print("Wrote default settings to %s - edit them (here or on the settings page), then start again." % path)
+        return
+    srv, port = start_ui_server(app, port)
+    url = "http://127.0.0.1:%d/" % port
+    if srv is None:                                   # already running: show its window
+        if headless:
+            print("A JMC DMX Bridge is already running (%s)" % url)
+            sys.exit(1)
+        open_window(url)
+        return
+    app.log("JMC DMX Bridge %s - settings: %s" % (VERSION, path))
+    win = None
+    if headless:
+        app.log("Settings page: " + url)
+        problems = app.start()
+        if problems:
+            app.log("Not started: " + "; ".join(problems))
+            sys.exit(1)
+        app.log("Running - Ctrl+C to stop.")
+    else:
+        t0 = time.time()
+        win = open_window(url)
+        app.log("Press Start, then send DMX from Resolume / MadMapper. Esc or STOP MOTORS = stop every motor.")
+    try:
+        while not app.quit.is_set():
+            if win is not None and win.poll() is not None:
+                if time.time() - t0 < 4.0:
+                    win = None                       # handed over to a running browser: use Quit instead
+                else:
+                    app.log("Window closed")
+                    break
+            app.quit.wait(0.5)
     except KeyboardInterrupt:
-        b.stop()
+        pass
+    app.stop()
+    srv.shutdown()
 
 
 if __name__ == "__main__":
@@ -920,10 +984,8 @@ if __name__ == "__main__":
         sys.stdout = sys.stderr = open(os.path.join(settings_dir(), "jmc_dmx_bridge.log"), "a", buffering=1)
     ap = argparse.ArgumentParser(description="Art-Net / sACN to JMC motors")
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="settings file (JSON)")
-    ap.add_argument("--headless", action="store_true", help="run without the settings window")
+    ap.add_argument("--headless", action="store_true", help="no window: start streaming with the saved settings")
+    ap.add_argument("--ui-port", type=int, default=UI_PORT, help="port of the settings page on this PC (default 8090)")
     ap.add_argument("--version", action="version", version="JMC DMX Bridge " + VERSION)
     a = ap.parse_args()
-    if a.headless:
-        run_headless(a.config)
-    else:
-        run_gui(a.config)
+    run_app(a.config, headless=a.headless, port=a.ui_port)
