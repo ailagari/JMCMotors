@@ -1,4 +1,4 @@
-# JMCMotors — UDP Command Reference (v0.5)
+# JMCMotors — Command Reference (v0.6)
 
 The complete reference for the text protocol implemented by this library: the
 one grammar every command follows, every command with its arguments, what each
@@ -12,6 +12,15 @@ Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 Companion documents: [HARDWARE.md](HARDWARE.md) (drive setup, wiring, bring-up)
 · [README](../README.md) (install and quick start).
 
+**Boards.** The protocol is the same on a CONTROLLINO, an ESP32, a Mega 2560
+and an Arduino Uno/Nano. The Uno leaves out `PS`/`PRS`, `SAVE`/`LOAD`, `SD`,
+`DG`, `BS`, `ZS`, `MC:n` (`MC:?` works), `X`, `HVZ`/`HACC` (they follow
+`HV`/`ACC`), the `S` formats `STATE`/`BITS`/`FLAGS`/`DETAIL`, and the
+explanatory text after errors and in the `WD` / `I` replies and fault names
+(the raw `ERR=` code stays); it manages at most 6 motors. Those commands
+answer `ERR:<CMD> not available on this board`. Sections marked
+*(not on Uno)* below are affected.
+
 ---
 
 ## Contents
@@ -19,34 +28,41 @@ Companion documents: [HARDWARE.md](HARDWARE.md) (drive setup, wiring, bring-up)
 1. [Transport and addressing](#1-transport-and-addressing)
 2. [The grammar: one rule for every command](#2-the-grammar-one-rule-for-every-command)
 3. [Reply types and multi-packet markers](#3-reply-types-and-multi-packet-markers)
-4. [Motion commands](#4-motion-commands) — `P` `PR`
+4. [Motion commands](#4-motion-commands) — `P` `PR` `PS` `PRS` `SL`
 5. [Speed and ramp commands](#5-speed-and-ramp-commands) — `V` `VS` `ACC` `DEC`
 6. [Stopping commands](#6-stopping-commands) — `B` `B1` `B2` `B3` `L` `BS`
 7. [Zero and homing commands](#7-zero-and-homing-commands) — `Z` `ZO` `ZS` `HV` `HVZ` `HACC` `HO` `H1`…`H12`
 8. [Status and diagnostic commands](#8-status-and-diagnostic-commands) — `S` `SD` `LS` `DG`
-9. [Controller commands](#9-controller-commands) — `I` `R` `MC` `SAVE` `LOAD` `VER` `PING` `X`
+9. [Controller commands](#9-controller-commands) — `I` `R` `MC` `WD` `SAVE` `LOAD` `VER` `PING` `X`
 10. [Events: what the controller sends on its own](#10-events-what-the-controller-sends-on-its-own)
 11. [Trigger and response matrix](#11-trigger-and-response-matrix)
 12. [Status word, drive states and error register](#12-status-word-drive-states-and-error-register)
 13. [Error message catalogue](#13-error-message-catalogue)
 14. [Recipes and sequences](#14-recipes-and-sequences)
-15. [Changes from 0.4](#15-changes-from-04)
+15. [Changes from 0.5 and 0.4](#15-changes-from-05-and-04)
 
 ---
 
 ## 1. Transport and addressing
 
+Two link types carry the same text; the sketch picks one.
+
+| Item | UDP (`JMCLinkUDP`: CONTROLLINO, ESP32 WiFi, Ethernet shields) | Serial (`JMCLinkSerial`: Uno USB, RS-232 COM port, any Stream) |
+|---|---|---|
+| Framing | one command per datagram, no terminator needed | one command per line, ended by CR, LF or CR LF |
+| Controller listens on | the board's IP and port (`pcLink.begin(port, pcIp, pcPort)`) | the serial port (Uno example: 57600 baud) |
+| Command replies go to | the **sender** of the command (its IP and source port) **and** `PC_IP:PC_PORT` (once if those are the same) | the serial port; each message ends with CR LF |
+| Events and `Motor ready` go to | `PC_IP:PC_PORT` **only** | the serial port |
+| Longest command | 511 characters (enough for 32 positions); 95 on an Uno | same |
+| Sender filter | `pcLink.allowSender(ip)` (up to 4); others are dropped and counted | — (physical link) |
+
 | Item | Value |
 |---|---|
-| Protocol | UDP, plain ASCII text, one command per datagram |
-| Controller listens on | `CONTROLLINO_IP:CONTROLLINO_PORT` (sketch: `setNetwork()`, or `setStationId(n)` → `192.168.1.(100+n):8001`) |
-| Command replies go to | the **sender** of the command (its IP and source port) **and** the configured `PC_IP:PC_PORT` (sent once if those are the same) |
-| Events and `Motor ready` go to | `PC_IP:PC_PORT` **only** — fixed for the life of the sketch |
-| Packet size | up to 511 characters (enough for 32 positions) |
-| Terminator | none needed; leading/trailing whitespace and line endings are trimmed |
+| Whitespace | leading/trailing whitespace and line endings are trimmed |
 | Case | command heads may be upper or lower case (`p:1000` works); values are case-insensitive too |
-| Authentication | none — any host that can reach the port can command the motors |
+| Authentication | none beyond the UDP sender filter — keep the control network separate |
 | Unknown command | reply `ERR:unknown command <HEAD>` |
+| Too long | `ERR:command too long` — the line is dropped, never truncated |
 
 ### Static addressing, no pairing
 
@@ -54,14 +70,13 @@ There is no discovery, beacon or auto-adopt. Both addresses are fixed in the
 sketch:
 
 ```cpp
-jmc.setNetwork(mac,
-               controllinoIp, controllinoPort,   // this board
-               pcIp,          pcPort);           // where events go
+Ethernet.begin(mac, boardIp);                   // or WiFi.config(...) + WiFi.begin(...)
+pcLink.begin(boardPort, pcIp, pcPort);          // listen here; events go to pcIp:pcPort
+pcLink.allowSender(pcIp);                       // optional: only the PC may command
 ```
 
-- **Controller side** — the board's own static IP/port. `setStationId(n)` is a
-  shortcut that derives a unique MAC (`DE:AD:BE:EF:00:<n>`) and IP
-  (`192.168.1.100+n`) from one number.
+- **Controller side** — the board's own static IP/port; each board needs a
+  unique IP (and, on Ethernet, MAC).
 - **PC side** — every `EVENT:` and the boot message go here, always. Because
   replies are *also* echoed to the sender, any UDP tool sees its answers
   without listening on `pcPort`. To receive **events** you must listen on
@@ -116,8 +131,14 @@ practical one past a dozen motors (`P:,,,,,,,,,,,,,,,,1000` versus
 
 ### Parsing rules worth knowing
 
-- A value that is not a number parses as **0** (`P:abc` moves motor 1 to step
-  0). Validate on the PC side.
+- Numbers are checked **strictly**: the whole field must be a number
+  (`-1000`, `+5`, `0.25`, `.5`). `P:12abc`, `V:fast` or `P:1e3` are refused
+  with `ERR:P bad value '12abc' (M1)` and nothing moves. Integers must fit in
+  32 bits.
+- **Tags:** any command may start with `#<digits> ` (up to 9 digits and a
+  space): `#17 P:1000`. Every reply to that command (including deferred `OK`s
+  and all `:MORE` packets) starts with the same `#17 `; events never carry a
+  tag. Use it to match replies to requests when several are in flight.
 - A motor name above the configured count (`MC`) is refused:
   `ERR:P motor must be M1..M6`.
 - Slots beyond the configured motor count are ignored.
@@ -132,6 +153,8 @@ practical one past a dozen motors (`P:,,,,,,,,,,,,,,,,1000` versus
 |---|---|---|
 | absolute move | `P:1000,,3000` · `P:M17=1000` | `PA:5000` |
 | relative move | `PR:-500,,200` | `PRA:-500` |
+| synchronised arrival | `PS:1000,,3000` · `PRS:M2=-500,M5=800` | `PSA:5000` · `PRSA:-500` |
+| soft limits | `SL:-1000/50000,,0/8000` · `SL:M2=OFF` · `SL:?` | `SLA:0/100000` · `SLA:OFF` · `SLA:?` |
 | read position | `P:?` · `P:,,?` · `P:M3` | `PA:?` |
 | run speed | `V:0.5,,0.3` · `V:?` | `VA:0.5` · `VA:?` |
 | jog | `VS:1,,1` | `VSA` |
@@ -157,9 +180,32 @@ practical one past a dozen motors (`P:,,,,,,,,,,,,,,,,1000` versus
 | **One packet per motor** | N separate datagrams | `SD`, `S:…:DETAIL`, `DG` with more than one motor |
 | **Warning** | `WARN: M1=10000,M2=ERROR` | a data reply where at least one motor did not answer on RS-485 |
 | **Error** | `ERR:<reason>` | bad arguments; nothing was sent to the drives |
+| **Drive did not take it** | `ERR:P M3 not accepted (TIMEOUT) - nothing started` | a drive did not answer, or answered with a Modbus exception, while the command was being sent (see below) |
 | **Unknown** | `ERR:unknown command PX` | head not recognised |
 | **Deferred** | `OK` arrives later | `P`/`PR` sent while motors are in velocity mode (see §4) |
 | **No further reply** | — | `X` answers once, then reboots |
+
+**`OK` means every drive accepted it.** Every frame the controller sends to
+a drive is checked (CRC, timeout, exception). If one fails, the reply names
+the first motor and the reason — `TIMEOUT`, `CRC`, `EXCEPTION`, `BADFRAME`
+— and says what happened:
+
+| Command | When a drive fails | Reply |
+|---|---|---|
+| `P` `PR` `PS` `PRS` (+A) | while the targets are sent: **nothing is started** (a partial coordinated move is worse than none) | `ERR:P M3 not accepted (TIMEOUT) - nothing started` |
+| same | at the start pulse (rare): the others may be moving | `ERR:P M3 not accepted (TIMEOUT) to the start - check it with S` |
+| `VS` | jog not started; motors already prepared are halted again | `ERR:VS M3 not accepted (TIMEOUT) - nothing started` |
+| `B` `B1` `B2` `B3` | the others **were** stopped | `ERR:B M3 not accepted (TIMEOUT) - the others were stopped` |
+| `Z` `ZO` | that motor's position was not set | `ERR:Z M3 not accepted (TIMEOUT) - position not set` |
+| `H<n>` | homing may not have started on it | `ERR:H M3 not accepted (TIMEOUT) - homing may not have started` |
+| `ACC` `DEC` `HV` `HVZ` `HACC` `HO` | stored in the controller, written again at the next `I` / `R` / re-init | `ERR:ACC M3 not accepted (TIMEOUT) - stored, written again at the next I / R` |
+| `L` | | `ERR:L M3 not accepted (TIMEOUT)` |
+| `I` `R` | per motor in the report | `NOT DETECTED (TIMEOUT)` / `Motor 3(FAIL) reset complete` |
+
+A drive that fails is also polled by the monitor; after two failed reads it
+is reported `EVENT:OFFLINE:Mn`, and from then on motion commands that select
+it are refused (`ERR:P M3 offline …`) and stops skip it (it still receives the
+broadcast stop) until `EVENT:ONLINE`.
 
 **Multi-packet markers.** Whenever one command answers with more than one
 datagram, every packet but the last ends with `:MORE` and the last ends with
@@ -192,7 +238,7 @@ reason is one of the bus result names: `TIMEOUT`, `CRC`, `EXCEPTION`,
 | `P:1000,2000,3000` | M1, M2, M3 launched together | `OK` |
 | `P:500,,1500` · `P:M1=500,M3=1500` | M1 → 500, M3 → 1500, skip M2 | `OK` |
 | `P:-40000` | negative targets are fine | `OK` |
-| `PA:5000` | every motor → 5000, broadcast start, at motor 1's `V` speed | `OK` |
+| `PA:5000` | every motor → 5000, each at its own `V`, broadcast start | `OK` |
 | `P:?` · `P:,,?` · `P:?,?` · `P:M3` | **read** position of M1 · M3 · M1+M2 · M3 | `M1=10000` · `M3=200` · `M1=10000,M2=2000` |
 | `PA:?` | read every motor | `M1=…,M2=…,…` |
 
@@ -202,14 +248,17 @@ reason is one of the bus result names: `TIMEOUT`, `CRC`, `EXCEPTION`,
    motor's stored velocity (`V`) into the drive — *prepare*.
 2. Then it launches. `PA`, and a `P` that addresses every motor, launch with
    **broadcast** frames (slave ID 0) so all drives start in the same instant;
-   a subset launches per motor (about 5 ms apart each). `PA` also *prepares*
-   by broadcast, so all motors run at **motor 1's `V` speed**.
+   a subset gets its start edges back to back, one frame apart (about 2 ms
+   per motor at 115200 baud, 6 ms at 38400). Every motor runs at **its own**
+   `V` (send `VA` first for one common speed).
 3. The new target takes effect **immediately** (control-word bit 5): a `P`
    sent mid-move abandons the move in flight and heads to the new target.
-   Per the manual the drive latches a target on the bit-4 edge only while
-   status bit 12 ("can set new position") is 1, so the controller waits for
-   that bit (up to 100 ms) before pulsing; an idle drive has it set already.
-4. `OK` means "launched", not "arrived". Watch `S:n:COMPACT` (`TR` = target
+   The start is the field-tested sequence: prepare (control word 0x2F),
+   bit 4 rising (0x3F), bit 4 low (0x2F).
+4. **Soft limits** (`SL`) are checked first: a target outside the motor's
+   limits refuses the whole command (`ERR:P M2 target 60000 outside soft
+   limit 0..50000`) and nothing moves.
+5. `OK` means "launched", not "arrived". Watch `S:n:COMPACT` (`TR` = target
    reached) to know when the motor is there.
 
 **If the motors are in velocity mode (`VS`)**: changing a drive's mode
@@ -223,17 +272,81 @@ the wait.
 
 **Errors**: `ERR:P needs values (e.g. P:1000,,3000 or P:M3=1000) - PA:<value> = all motors`
 · `ERR:P motor must be M1..M6 (e.g. P:M3=1000)` · `ERR:PA takes one value for all
-motors (e.g. PA:1000)` · `ERR:P cannot mix values and ?`.
+motors (e.g. PA:1000)` · `ERR:P cannot mix values and ?` · `ERR:P bad value 'x' (M2)`
+· `ERR:P M2 offline (check power / RS-485, or send I)` (a selected motor is
+offline: nothing moves; `PA` skips offline motors) · `ERR:P no motor online`
+· `ERR:P M2 target … outside soft limit …`. On the Uno the `(e.g. …)` hints
+are left out.
 
 ### `PR` — relative position move · `PRA` — all motors
 
 Same syntax, launch sequence, deferral behaviour and errors as `P` (with
 `PR` in the messages), but every value is a **delta from the motor's current
 position**: `PR:1000` forward 1000, `PR:-1000` back, `PR:500,,-500`
-synchronised, `PRA:-250` every motor back 250. The offset is applied inside
-the drive (control-word bit 6), so there is no read-modify-write race even if
-the motor is still moving. `PR:?` and `PRA:?` read positions, identical to
-`P:?` / `PA:?`.
+synchronised, `PRA:-250` every motor back 250. `PR:?` and `PRA:?` read
+positions, identical to `P:?` / `PA:?`.
+
+**How it is sent (0.6).** The controller reads each motor's actual position
+and sends an absolute target, *position + delta*. It does not use the drive's
+relative bit (control word bit 6): per the manual that adds the delta to the
+drive's internal previous target, which cannot be read back (0x607A returns
+the last value written) and need not match the shaft after `Z`, `ZO` or
+homing — `P:5000`, `ZO:0`, `PR:100` could otherwise travel to 5100. Sent
+mid-move, `PR` is relative to where the shaft is at that moment. Soft limits
+are checked against the exact target; a target beyond the 32-bit range is
+held at ±2,147,483,647 (and then refused by any soft limit). A motor that
+does not answer the position read refuses the command: `ERR:PR M2 not
+responding`.
+
+### `PS` — synchronised-arrival move · `PSA`, `PRS` · `PRSA` *(not on Uno)*
+
+Same slots as `P` / `PR` (`PS:1000,,3000`, `PS:M2=500,M5=-800`, `PSA:0`,
+`PRS:-500,,500`), but every selected motor **starts and arrives together**,
+moving in a straight line in joint space.
+
+**What it triggers**
+
+1. Reads every selected motor's actual position (a `PRS` delta is taken from
+   the actual position, because the scaling needs exact distances). A motor
+   that does not answer refuses the command: `ERR:PS M2 not responding`.
+2. Checks soft limits, like `P`.
+3. Works out one common profile: with *dᵢ* = each motor's distance and *k* =
+   *dᵢ / dmax*, the speed, acceleration and deceleration are the largest that
+   keep **every** axis at or below its own `V`, `ACC` and `DEC` once scaled by
+   *k*. The longest axis runs its profile; the others run proportionally
+   slower profiles of the same duration.
+4. Writes each motor's scaled speed and ramps, prepares the targets and starts
+   them together (broadcast when every motor takes part). The motors' own
+   `ACC`/`DEC` are written back before their next normal move or jog.
+5. Replies `OK`, or `OK (sync within 20% - drive resolution is 0.1 rps and
+   0.1 rps/s; raise V, ACC, DEC for tighter sync)` when rounding to the
+   drive's 0.1 rps / 0.1 rps/s registers makes the axes' speeds or ramps
+   differ from each other by more than 2 %. The number is the largest such
+   difference (an upper bound: a ramp mismatch only matters while ramping).
+   Slow axes are the ones affected — e.g. an axis scaled to 0.25 rps runs at
+   0.3. Axes that all round the same way stay in step and get a plain `OK`.
+
+Motors that are jogging are braked first and the move starts when they are at
+rest, exactly like `P`. `PS:?` is refused (`ERR:PS takes values; read
+positions with P:?`).
+
+### `SL` — software position limits · `SLA`
+
+| Send | Effect | Reply |
+|---|---|---|
+| `SL:-1000/50000` | motor 1 may only be commanded within −1000 … 50000 steps | `SL: M1=-1000/50000` |
+| `SL:0/8000,,0/12000` · `SL:M3=0/12000` | per motor | `SL: M1=0/8000,M3=0/12000` |
+| `SL:M2=OFF` | remove motor 2's limits | `SL: M2=OFF` |
+| `SLA:0/100000` · `SLA:OFF` | every motor | `SLA: all motors = 0/100000` |
+| `SL:?` · `SL:M2` · `SLA:?` | read | `SL: M1=-1000/50000,M2=OFF` |
+
+`P`, `PR`, `PS`, `PRS` outside the limits are refused before anything is
+sent. A jog (`VS`) is checked by the monitor while it runs and stopped at the
+limit in its direction of travel: `EVENT:SOFTLIMIT:M1 POS=50012 LIMIT=50000`
+(the motor overshoots by its deceleration distance). Soft limits are set in
+the sketch with `setMotorSoftLimits(id, min, max)` and are kept by `SAVE`.
+They complement, and do not replace, the drives' hardware limit switches.
+**Errors**: `ERR:SL value must be min/max with min < max, or OFF (M1)`.
 
 ---
 
@@ -252,7 +365,7 @@ re-applied on every boot and whenever a drive comes back online.
 | `V:0.5` | motor 1 = 0.5 rps (stored; written at the next move or jog) | `Set V: M1=0.50 rps` |
 | `V:0.5,1,0.3` · `V:M1=0.5,M3=0.3` | per motor | `Set V: M1=0.50,M2=1.00,M3=0.30 rps` |
 | `V:-0.5` | negative = reverse direction for `VS` | `Set V: M1=-0.50 rps` |
-| `VA:1` | every motor; also **broadcast to the drives now**, so a running jog changes speed at once | `VA: all motors = 1.00 rps (BROADCAST)` |
+| `VA:1` | every motor; also **sent at once to every motor that is jogging**, so a running jog changes speed at once | `VA: all motors = 1.00 rps (BROADCAST)` |
 | `V:?` · `V:,,?` · `V:M3` · `VA:?` | read | `V: M1=0.50 rps` · `V: M1=0.30,M2=0.30,… rps` |
 
 Default 0.3 rps = 18 RPM. Range 0.01–1000 rps in magnitude. **Errors**:
@@ -288,7 +401,7 @@ slots (e.g. VS:1,,1 or VS:M1,M3) - VSA = all motors`.
 Setting `DEC` also refreshes the quick-stop ramp used by `B2`. Ramp time =
 speed ÷ ramp (0.3 rps at 0.1 rps/s = 3 s). For geared mechanisms pair a slow
 ramp with drive parameter **P19 = 7**. Default 0.5 rps/s each. Range
-0.1–6553.5. **Errors**: `ERR:ACC range 0.1..6553.5 rps/s (M2)` and the
+0.1–3276.7 (register 32767: the manual types 0x6083 / 0x6084 both as UNSIGNED16 and as INTEGER16, so the controller stays inside both). **Errors**: `ERR:ACC range 0.10..3276.7 rps/s (M2)` and the
 generic ones above.
 
 ---
@@ -318,8 +431,19 @@ The **stop type is the digit in the head**; the argument selects motors.
 `B`, `B1`, `B2` and `B3` with nothing after them stop **all** motors, so a
 stop is never refused for a missing selector.
 
-**What it triggers**: cancels any move waiting for a ramp-down ("stop wins"),
-then sends the stop to each selected motor. After a `B` the status word shows
+**What it triggers**: cancels any move waiting for a ramp-down ("stop wins").
+A stop of **every** motor goes out first as **one broadcast frame** (slave 0,
+allowed for writes by the manual): all drives stop in the same instant, and a
+drive that does not answer cannot delay the others. Then each selected online
+motor gets the stop again individually, which confirms it heard it; one that
+does not answer gives `ERR:B M3 not accepted (TIMEOUT) - the others were
+stopped`. A stop of selected motors (`B:,1`) is sent to those motors only. The quick
+stops `B1`…`B3` write the code to 0x605A, then control word **0x000B**: bit 2
+= 0 with bit 1 = 1 is "quick stop" in the manual's state table, and bits 0 and
+3 stay 1, so there is no "motor enable 1→0" edge (bit table) that could let
+the motor coast instead of braking. After a halt (`B`), the next move keeps
+the halt on until its own start pulse, so the drive cannot resume its
+previous target for a moment. After a `B` the status word shows
 `HALT` (bit 8); after a quick stop the drive sits in "Quick stop active". The
 next `P` or `VS` re-enables automatically. `BS` reports the result.
 **Errors**: `ERR:B type is B, B1, B2 or B3` · `ERR:B motor must be M1..M6`.
@@ -365,9 +489,10 @@ Reply: BRAKE STATUS: M2:BRAKE/STOP | SUMMARY: BRAKED
 | `Z:1,,1` · `Z:M1,M3` | motors 1 and 3 | `Motor 1,3 set to zero position` |
 
 **What it triggers**: a jogging motor is braked to standstill first (blocking,
-max 5 s); then, per motor, homing method 0 "set current position", a 20 ms
-pause, and back to position mode. The shaft does not move. The controller
-marks the motor as zero-set for `ZS`.
+max 5 s); then, per motor, homing method 0 "set current position" (manual
+p.20), a wait for status bit 12 (complete, at most 200 ms), a **read-back of
+the position**, and back to position mode. The shaft does not move. The
+controller marks the motor as zero-set for `ZS`.
 
 ### `ZO` — current position becomes a value · `ZOA`
 
@@ -380,8 +505,14 @@ marks the motor as zero-set for `ZS`.
 Use it to restore a known coordinate after a drive power cycle without
 re-homing. Internally `Z` and `ZO` run homing method 0 with the value in the
 drive's home-offset register — the same register `HO` uses — which is why
-every `H<n>` re-writes the stored `HO` first. **Errors**: `ERR:ZO needs
-values (…)` · `ERR:ZO takes values, not ? (read positions with P:?)`.
+every `H<n>` re-writes the stored `HO` first.
+
+**Verified, not assumed.** The manual does not say which sign the offset has
+for method 0, so the controller reads the position back. A drive that applies
+it the other way round (reads −value) is set again with the sign flipped and
+checked again; a drive that ignores it is reported: `ERR:ZO M1 reads 0 after
+setting 5000`. **Errors**: `ERR:ZO needs values (…)` · `ERR:ZO takes values,
+not ? (read positions with P:?)` · `ERR:ZO M1 reads <x> after setting <v>`.
 
 ### `ZS` — zero status · `ZSA`
 
@@ -431,7 +562,7 @@ The drive's own homing ramp (0x609A). Unset, it **follows the motor's `ACC`**.
 | Send | Effect | Reply |
 |---|---|---|
 | `HO:1000` | motor 1 stops 1000 steps past the sensor | `HO: M1=1000 steps after sensor (used at next homing)` |
-| `HO:1000,,-800` · `HO:M3=-800` | per motor; negative = the other direction | `HO: M1=1000,M3=-800 steps after sensor (used at next homing)` |
+| `HO:1000,,-800` · `HO:M3=-800` | per motor; negative = the other direction — **methods 9–12 only** (manual §6.3; `H1`…`H8` refuse it) | `HO: M1=1000,M3=-800 steps after sensor (used at next homing)` |
 | `HOA:500` | every motor | `HO: M1=500,M2=500,… steps after sensor (used at next homing)` |
 | `HO:?` · `HO:M3` · `HOA:?` | read stored offsets | `HO: M1=1000` · `HO: M1=1000,M2=0,…` |
 
@@ -450,6 +581,24 @@ The drive supports homing methods 0–12 (JMC Modbus manual V2.2, §6.3).
 Method 0 is what `Z`/`ZO` use. The three inputs involved are the **CW limit**,
 the **CCW limit** and the **origin switch** ("SW mechanical origin", status
 bit 11). "Left" = towards the CW limit, "right" = towards the CCW limit.
+
+**Which way is which.** The manual's homing descriptions (§6.3) put the **CW
+limit at the "left" end** (method 1 moves left to it) and the CCW limit at the
+"right" end; with the usual CiA 402 numbering that makes CW the end reached
+moving towards **lower (negative) positions** and CCW the positive end. The
+drive refuses motion *into* an active limit and allows motion away from it. So
+if negative moves do nothing while positive ones work, check `LS:Mn`: `CW=1`
+with nothing pressed means the input polarity (drive P42) or the wiring is
+wrong. Confirm the directions once on your machine: jog slowly negative
+(`V:-0.1`, `VS:Mn`) and press each switch by hand.
+
+**Checked before anything moves (0.6)**, from the same section of the
+manual: methods 1–4 home at most at 300 r/min, so `HV` and `HVZ` above 5 rps
+are refused for them (`ERR:H3 M1 HV/HVZ above 5 rps (H1..H4: max 300 r/min)`);
+only methods 9–12 accept a negative home offset, so a negative `HO` with
+methods 1–8 is refused (`ERR:H3 M1 negative HO needs H9..H12`). The manual's
+own homing example uses 10 rps with method 1; the controller follows the
+stated 300 r/min limit.
 
 | Method | Uses | Behaviour (per the JMC manual) | Max homing speed |
 |---|---|---|---|
@@ -471,6 +620,8 @@ events: `EVENT:HOMED:M1 POS=0 ST=…` (status bit 12 in homing mode) and
 `EVENT:HOMING_ERROR:M1 ST=…` (bit 13). `LS` shows `HOMED=BUSY` meanwhile. The
 drive stays in homing mode until the next move command, which switches it
 back to position mode automatically. **Errors**: `ERR:homing method H1..H12`
+· `ERR:H3 M1 HV/HVZ above 5 rps (H1..H4: max 300 r/min)` · `ERR:H3 M1 negative
+HO needs H9..H12`
 · `ERR:H needs motor slots (e.g. H:1,,1 or H:M1,M3) - HA = all motors` (read
 `H3:…` / `H3A`).
 
@@ -622,9 +773,14 @@ online/offline for the monitor. The homed flag is kept; nothing moves.
 | `R:,,1` · `R:M3` | motor 3 | `Motor 3 reset complete` |
 
 A motor that fails to come back is tagged `Motor 2(FAIL) reset complete`.
+`R` and `I` run the manual's power-up routine (0x0001 → 0x0003 → 0x000F),
+which briefly switches the motor off: send them with the motor stopped. The
+jog speed is set to 0 before the motor is enabled again, so a drive that was
+left in velocity mode cannot start turning.
 Clears a drive fault, re-runs init with the motor's ramps and homing
-parameters, keeps the homed flag, and clears the fault flag in the monitor so
-a persisting fault is reported again as a new `EVENT:FAULT`.
+parameters, and keeps the homed flag. If the fault is gone afterwards, it
+sends `EVENT:FAULT_CLEARED:Mn` right away; if it persists, it is reported again
+as a new `EVENT:FAULT`.
 
 ### `MC` — motor count
 
@@ -637,7 +793,26 @@ Growing the count probes and initialises the new slots at once. Kept across
 reboot only by `SAVE`; otherwise the sketch's `setMotorCount()` applies.
 **Errors**: `ERR:MC range 1..32`.
 
-### `SAVE` · `LOAD` — settings in EEPROM
+### `WD` — communication watchdog
+
+| Send | Effect | Reply |
+|---|---|---|
+| `WD:500` | if no command arrives for 500 ms, every motor stops | `WD: 500 ms - send any command (PING) more often than that` |
+| `WD:0` | off (default) | `WD: off` |
+| `WD:?` · `WD` | read | `WD: off` · `WD: 500 ms - all motors stop when no command arrives for that long` |
+
+When it expires: any queued move is cancelled, every online motor gets a
+controlled stop (`B`), and one event goes out:
+`EVENT:WATCHDOG:STOP no command for 500 ms - all motors stopped`. It re-arms
+with the next command. Any command feeds it, including `PING` and rejected
+ones; datagrams dropped by the sender filter do not. Range 50 … 65000 ms; set
+in the sketch with `setCommandWatchdog(ms)`; kept by `SAVE`.
+**Errors**: `ERR:WD range 0 (off) or 50..65000 ms`.
+
+The separate **processor watchdog** (`enableHardwareWatchdog(ms)` in the
+sketch) reboots the board if the firmware itself hangs.
+
+### `SAVE` · `LOAD` — settings in EEPROM *(not on Uno)*
 
 **Policy.** The sketch's values are the admin's configuration: edit, flash,
 done. `SAVE` exists for changes made over UDP on a *deployed* unit, so nobody
@@ -650,7 +825,7 @@ override a new flash.
 
 | Send | Effect | Reply |
 |---|---|---|
-| `SAVE` | store `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO` of every motor and the motor count in the Controllino's EEPROM | `SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC) - applied at every boot until the sketch is re-flashed with other values` |
+| `SAVE` | store `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `SL` of every motor, the `WD` time and the motor count (AVR: EEPROM, ESP32: flash) | `SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, SL, WD, MC)` |
 | `SAVE:?` | is anything stored, and does it apply? | `SAVE: nothing stored - sketch values in use` · `SAVE: settings stored and applied at boot (SAVE:CLEAR to forget)` · `SAVE: settings stored but IGNORED - sketch was re-flashed with other values (LOAD applies them, SAVE re-arms)` |
 | `SAVE:CLEAR` | forget the stored block | `SAVE: cleared - sketch values apply at next boot` |
 | `LOAD` | apply the stored block now, even if the sketch changed since | `LOAD: 6 motors loaded and applied` |
@@ -665,9 +840,9 @@ or SAVE:CLEAR` · `ERR:SAVE EEPROM too small`.
 
 | Send | Reply | Notes |
 |---|---|---|
-| `VER` | `JMCMotors 0.5.1` | check firmware compatibility from the PC |
+| `VER` | `JMCMotors 0.6.0 (max 32 motors)` | firmware version and this board's motor limit (6 on an Uno) |
 | `PING` | `PONG` | cheap link check; no bus traffic |
-| `X` | `System restart initiated...` then `Motor ready` on PC_PORT | soft reset; runtime settings revert to the sketch (or the `SAVE`d block); drive counters untouched |
+| `X` | `System restart initiated...` then `Motor ready` on PC_PORT | soft reset (AVR: jump to 0, ESP32: `ESP.restart()`); runtime settings revert to the sketch (or the `SAVE`d block); drive counters untouched |
 
 ---
 
@@ -680,7 +855,7 @@ when it clears, never a repeat while it persists.
 
 | Trigger (what happened on the drive) | Event | What to do |
 |---|---|---|
-| CW limit input goes active (bit 14 rises) | `EVENT:LIMIT:M2:CW POS=48211 ST=0x4677` | the drive has already stopped that direction; back off with `PR`, or re-home |
+| CW limit input goes active (bit 14 rises) | `EVENT:LIMIT:M2:CW POS=-48211 ST=0x4677` | the drive has stopped moving that way; CW is the negative ("left") end per the manual, so back off with a positive `PR` (see "Which way is which" in §7), or re-home |
 | CW limit input released | `EVENT:LIMIT:M2:CW_CLEARED` | — |
 | CCW limit input goes active (bit 15) / released | `EVENT:LIMIT:M2:CCW POS=-120 ST=0x8677` / `EVENT:LIMIT:M2:CCW_CLEARED` | as above |
 | Origin switch input goes active (bit 11) / released | `EVENT:ORIGIN:M2:ON POS=1012 ST=0x1c37` / `EVENT:ORIGIN:M2:OFF` | informational; methods 3/4/7/8/11/12 stop here |
@@ -688,6 +863,8 @@ when it clears, never a repeat while it persists.
 | Homing run fails (bit 13 in homing mode) | `EVENT:HOMING_ERROR:M2 ST=0x3437 (check limit/origin wiring, HV, HO)` | check the switches and P42 polarity, lower `HV`, `R:…`, retry |
 | Fault bit (bit 3) rises / clears | `EVENT:FAULT:M3 ST=0x678 ERR=0x2 CURRENT` / `EVENT:FAULT_CLEARED:M3` | `SD` for the cause, fix it, `R:…` |
 | Two consecutive status reads fail | `EVENT:OFFLINE:M4` | check power / RS-485 / slave ID; retried every 3 s |
+| A jog (`VS`) reaches a soft limit (`SL`) | `EVENT:SOFTLIMIT:M1 POS=50012 LIMIT=50000` | the motor was stopped; jog the other way or reposition |
+| No command for the `WD` time | `EVENT:WATCHDOG:STOP no command for 500 ms - all motors stopped` | the PC or network stalled; check it, then resume |
 | An offline drive answers again | `EVENT:ONLINE:M4 ST=0x1437 (re-initialised)` | re-initialised automatically (ramps, homing parameters, `HO`); a power-cycled drive is back at **position 0** — re-home or `ZO` |
 
 `ERR=` in a fault event is the raw 0x1001 register followed by the decoded
@@ -696,6 +873,15 @@ names `CURRENT`, `VOLTAGE`, `TEMP`, `COMM`, `OVERPOS`, `PHASE`, or `GENERIC`.
 450 ms). **Not an event**: target reached and the end of a `B` ramp — poll
 `S:n:COMPACT` for `TR`.
 
+**What polling cannot see.** The monitor reads the status word, one motor
+at a time; an input that is active for less than one sweep can fall between
+two reads. Limit switches are not affected in practice — the drive stops
+*on* an active limit, so it stays active until the motor backs off. An
+origin switch crossed at speed (or a limit touched only while a homing run
+reverses) can be missed; the drive itself still uses it, so homing works —
+only the `EVENT:ORIGIN` for that brief pass may not arrive. Use `LS` while
+commissioning, and do not rely on `EVENT:ORIGIN` as a position trigger.
+
 ---
 
 ## 11. Trigger and response matrix
@@ -703,9 +889,12 @@ names `CURRENT`, `VOLTAGE`, `TEMP`, `COMM`, `OVERPOS`, `PHASE`, or `GENERIC`.
 | Command | Writes to drives? | Stored in controller? | Cancels a pending move? | Brakes a jog first? | Reply |
 |---|---|---|---|---|---|
 | `P` / `PR` / `PA` / `PRA` | yes: target + velocity, enable, start (broadcast for all) | mode = position | supersedes it | yes, non-blocking, `OK` deferred | `OK` |
+| `PS` / `PRS` (+A) | yes: scaled speed/ramps + target, start | mode = position | supersedes it | yes, non-blocking, `OK` deferred | `OK` / `OK (sync within …)` |
 | `P:?` `PA:?` | reads position | — | no | no | `M1=…` / `WARN: …` |
+| `SL` / `SLA` | no | yes | no | no | `SL: …` / `SLA: …` |
+| `WD` | no | yes | no | no | `WD: …` |
 | `V` | **no** (used at next move) | yes | no | no | `Set V: M1=…` |
-| `VA` | yes, broadcast velocity | yes | no | no | `VA: all motors = … (BROADCAST)` |
+| `VA` | yes, to jogging motors | yes | no | no | `VA: all motors = …` |
 | `VS` / `VSA` | yes: mode, velocity, start | mode = velocity | yes | — | `VS: velocity mode started …` |
 | `ACC` / `DEC` (+A) | yes (DEC also quick-stop ramp) | yes | no | no | `Set ACC: M1=…` / `ACCA: all motors = …` |
 | `B` `B1` `B2` `B3` (+A, bare) | yes: halt / quick-stop | — | yes | — | `… stopped with deceleration` / `… brake applied to …` |
@@ -722,7 +911,7 @@ names `CURRENT`, `VOLTAGE`, `TEMP`, `COMM`, `OVERPOS`, `PHASE`, or `GENERIC`.
 | `R` / `RA` | yes: alarm reset + init | online/fault flags, mode = position | yes | — | `… reset complete` |
 | `MC` | yes, for newly added slots | yes (RAM) | no | no | `MC: …` |
 | `SAVE` / `LOAD` | LOAD: ramps + homing params to online drives | EEPROM / RAM | no | no | `SAVE: …` / `LOAD: …` |
-| `VER` / `PING` | no | — | no | no | `JMCMotors 0.5.0` / `PONG` |
+| `VER` / `PING` | no | — | no | no | `JMCMotors 0.6.0 (max 32 motors)` / `PONG` |
 | `X` | no | all RAM cleared | yes (reboot) | — | `System restart initiated...` then `Motor ready` |
 
 ---
@@ -794,7 +983,7 @@ origin switch.
 | `ERR:<CMD>A takes one value for all motors (e.g. <CMD>A:1000)` | a comma list after an `A` form |
 | `ERR:<CMD> motor must be M1..M<n>` | `M` name out of range or malformed |
 | `ERR:<CMD> cannot mix values and ?` | `P:1000,?` |
-| `ERR:V range 0.01..1000.0 rps (M2)` · `ERR:HV range 0.01..20.0 rps (M2)` (same for `HVZ`) · `ERR:ACC range 0.1..6553.5 rps/s (M2)` (same for `DEC`, `HACC`) | value out of range in that slot; nothing written |
+| `ERR:V range 0.01..1000.0 rps (M2)` · `ERR:HV range 0.01..20.0 rps (M2)` (same for `HVZ`) · `ERR:ACC range 0.10..3276.7 rps/s (M2)` (same for `DEC`, `HACC`) | value out of range in that slot; nothing written |
 | `ERR:ZO takes values, not ? (read positions with P:?)` | `ZO:?` |
 | `ERR:B type is B, B1, B2 or B3` | `B4`, `B9`… |
 | `ERR:homing method H1..H12` | `H0`, `H13`… |
@@ -802,6 +991,19 @@ origin switch.
 | `ERR:MC range 1..32` | count out of range |
 | `ERR:SAVE use SAVE, SAVE:? or SAVE:CLEAR` · `ERR:SAVE EEPROM too small` | bad `SAVE` argument / no room |
 | `ERR:LOAD nothing stored (or checksum failed)` | `LOAD` with no valid block |
+| `ERR:<CMD> bad value '<text>' (M<n>)` | a field is not a valid number |
+| `ERR:<CMD> M<n> not accepted (<reason>)<what happened>` | a drive did not answer or rejected a frame while the command was sent — see "OK means every drive accepted it" in §3 |
+| `ERR:command too long` | the line / datagram is longer than the command buffer (511, Uno 95) |
+| `ERR:<CMD> M<n> offline (check power / RS-485, or send I)` · `ERR:<CMD> no motor online` | a motion command selected a motor the monitor has marked offline |
+| `ERR:<CMD> M<n> target <t> outside soft limit <min>..<max>` | `SL` refused the move |
+| `ERR:PS M<n> not responding` · `ERR:PR M<n> not responding` | `PS`/`PRS`/`PR` could not read a motor's position |
+| `ERR:H<m> M<n> HV/HVZ above 5 rps (H1..H4: max 300 r/min)` | homing speed above the manual's limit for methods 1–4 |
+| `ERR:H<m> M<n> negative HO needs H9..H12` | negative home offset with methods 1–8 |
+| `ERR:PS takes values; read positions with P:?` | `PS:?` |
+| `ERR:SL value must be min/max with min < max, or OFF (M<n>)` | bad `SL` field |
+| `ERR:WD range 0 (off) or 50..65000 ms` | bad `WD` value |
+| `ERR:<CMD> not available on this board` | Uno: `PS`, `PRS`, `SAVE`, `LOAD`, `SD`, `DG`, `BS`, `ZS`, `MC:n`, `X`, `HVZ`, `HACC` |
+| `ERR:S formats on this board: RAW\|COMPACT` | Uno: other `S` formats |
 
 `WARN:` is not an error: the command succeeded for the motors listed with
 values; those marked `ERROR` did not answer on the bus.
@@ -814,7 +1016,7 @@ values; those marked `ERROR` did not answer on the bus.
 
 ```
                       ← Motor ready            (arrives on PC_PORT at boot)
-VER                   → JMCMotors 0.5.1
+VER                   → JMCMotors 0.6.0 (max 32 motors)
 IA                    → MOTOR INITIALIZATION: … Total motors detected: 6 of 6
 PA:?                  → M1=0,M2=0,…
 SA:COMPACT            → M1:RUN|STP|TR|POS=0|VEL=0.0,M2:…
@@ -823,7 +1025,7 @@ SA:COMPACT            → M1:RUN|STP|TR|POS=0|VEL=0.0,M2:…
 ### A typical positioning cycle
 
 ```
-VA:0.5                → VA: all motors = 0.50 rps (BROADCAST)
+VA:0.5                → VA: all motors = 0.50 rps
 ACCA:0.3              → ACCA: all motors = 0.30 rps/s
 DECA:0.3              → DECA: all motors = 0.30 rps/s
 P:4000,8000,12000     → OK                            launched, synchronised
@@ -861,7 +1063,7 @@ polarity (drive P42), lower `HV`, then `R:M1` and retry.
 ```
 HVA:0.2  HVZA:0.05  HOA:500  H3A        one EVENT:HOMED per motor follows
 ACC:0.2,0.2,0.5,0.5,0.1,0.1             per-axis ramps
-SAVE                  → SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, MC)
+SAVE                  → SAVE: 6 motors stored (V, ACC, DEC, HV, HVZ, HACC, HO, SL, WD, MC)
 ```
 
 ### Recover from a fault
@@ -891,6 +1093,22 @@ ZS:M4                 → ZERO STATUS: M4:ZERO(0) | ALL_ZERO_SET      counter is
 H3:M4  (or ZO:M4=<known>)
 ```
 
+### Coordinated move that arrives together
+
+```
+V:2,2,1               → Set V: M1=2.00,M2=2.00,M3=1.00 rps    per-axis maxima
+PS:40000,10000,-5000  → OK                       all three arrive at the same moment
+```
+
+### Watchdog-protected session
+
+```
+WD:500                → WD: 500 ms - send any command (PING) more often than that
+#1 PA:0               → #1 OK
+PING   (every 200 ms) → PONG
+                      ← EVENT:WATCHDOG:STOP no command for 500 ms - all motors stopped   (if the PC stalls)
+```
+
 ### Emergency
 
 ```
@@ -901,7 +1119,30 @@ RA                    → All motors reset complete      when safe to resume
 
 ---
 
-## 15. Changes from 0.4
+## 15. Changes from 0.5 and 0.4
+
+**0.5 → 0.6** — the commands are unchanged; these are additions and the
+behaviour changes worth knowing:
+
+| 0.5 | 0.6 | Why |
+|---|---|---|
+| CONTROLLINO only, UDP only | CONTROLLINO, ESP32, Uno/Nano, Mega 2560; UDP or serial link | the hardware in use |
+| `PA` ran every motor at motor 1's `V` | each motor at its own `V` | per-motor speeds are respected everywhere |
+| a non-number parsed as 0 (`P:abc` → step 0) | `ERR:P bad value 'abc' (M1)` | a typo must never move a motor |
+| over-long packet truncated | `ERR:command too long` | same |
+| `PR` used the drive's relative bit 6 (adds to its internal previous target) | `PR` = actual position + delta, sent as an absolute target | exact after `Z`/`ZO`/homing; exact soft-limit checks |
+| `OK` even if a drive missed a frame | `ERR:<CMD> Mn not accepted (<reason>) …`; coordinated moves abort before starting | `OK` is a guarantee |
+| stops sent drive by drive | stop of all motors: one broadcast frame first, then confirmed per drive | simultaneous, and a dead drive cannot delay the others |
+| homing speeds and offsets not checked | `H1`–`H4` refuse `HV`/`HVZ` > 5 rps; `H1`–`H8` refuse a negative `HO` | manual §6.3 |
+| move waited up to 100 ms for status bit 12 (0.5.1) | removed; start sequence as in 0.1–0.5.0 | bit 12 is the set-point acknowledge in the manual's timing diagram; the wait only added latency |
+| — | `PS`, `PRS`, `PSA`, `PRSA` | synchronised arrival |
+| — | `SL`, `SLA`, `EVENT:SOFTLIMIT` | software travel limits |
+| — | `WD`, `EVENT:WATCHDOG` | stop motors when the PC goes quiet |
+| — | `#<n>` reply tags | match replies to requests |
+| `SAVE` kept V … HO, MC | also `SL` and `WD` | |
+| `VER` → `JMCMotors 0.5.1` | `JMCMotors 0.6.0 (max 32 motors)` | shows the board's motor limit |
+
+**0.4 → 0.5**
 
 | 0.4 | 0.5 | Why |
 |---|---|---|

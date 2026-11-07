@@ -2,8 +2,8 @@
 
 Everything on the physical side, in the order you do it: what to buy, how to
 wire it, which drive parameters to set on each motor, how to configure the
-sketch for your motors, and how to commission each axis with the UDP
-commands. For the command protocol see [PROTOCOL.md](PROTOCOL.md); for
+sketch for your motors, and how to commission each axis with the text
+commands. Covers the CONTROLLINO, ESP32, Arduino Uno/Nano and Mega 2560. For the command protocol see [PROTOCOL.md](PROTOCOL.md); for
 install-and-run see the [README](../README.md).
 
 Library: https://github.com/ailagari/JMCMotors
@@ -32,13 +32,22 @@ Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 
 | Item | Notes |
 |---|---|
-| **Controllino MAXI** (or another Controllino with built-in RS-485 and Ethernet) | the library drives the RS-485 transceiver through the CONTROLLINO library on `Serial3` |
+| **A controller board**, one of: | |
+| · CONTROLLINO MAXI / MEGA | built-in RS-485 (`Serial3`, driven through the CONTROLLINO library) and Ethernet |
+| · ESP32 (any Arduino-ESP32 board) | WiFi; needs a **3.3 V TTL-to-RS-485 module** (MAX3485 / SP3485) |
+| · Arduino Uno / Nano | USB to the PC; needs a **TTL-to-RS-485 module** (MAX485); up to 6 motors |
+| · Arduino Mega 2560 + W5100/W5500 Ethernet shield | needs a TTL-to-RS-485 module (MAX485) |
 | **JMC integrated servo/stepper drives**, IHSS or IHT "-RC" series | the RC suffix is the RS-485/Modbus variant (e.g. IHSS60-RC) — the drives this library was verified against |
-| **Motor power supply** per the drive datasheet | separate from the Controllino's 12/24 V logic supply; size it for all motors at once |
+| **Motor power supply** per the drive datasheet | separate from the controller board's logic supply; size it for all motors at once |
 | **RS-485 cable**: twisted pair, shielded | one pair for A/B, daisy-chained; a 120 Ω resistor for the last drive |
-| **Ethernet** cable + a switch or a direct cable to the PC | the Controllino needs a static IP on the PC's subnet |
+| **Network** (CONTROLLINO, ESP32, Mega): Ethernet cable / switch, or WiFi | static IP on the PC's subnet |
 | **Limit / origin switches** (optional) | PNP or NPN, wired to the drive's inputs; polarity is a drive parameter (P42) |
-| A UDP tool on the PC | SocketTest, Packet Sender, `ncat -u`, or your own application |
+| A UDP tool on the PC (network boards) or a serial terminal (Uno) | SocketTest, Packet Sender, `ncat -u`, the Arduino Serial Monitor, or your own application |
+
+> **RS-485, not RS-232.** The JMC "-RC" drives speak RS-485 only. A
+> TTL-to-RS-232 (MAX3232) module between the board and the drives will not
+> work. RS-232 is only an option on the *PC* side of an Uno (to reach a COM
+> port instead of USB).
 
 ---
 
@@ -47,43 +56,67 @@ Author: LAGARI A <lagariscience@gmail.com> · License: MIT
 ### Power
 
 - Each drive gets motor power from the motor supply, within the voltage range
-  on its datasheet. Keep the Controllino on its own logic supply.
-- Common ground between the Controllino and the drives is recommended so the
+  on its datasheet. Keep the controller board on its own logic supply.
+- Common ground between the controller board and the drives is recommended so the
   RS-485 signal stays within its common-mode range (run a GND wire alongside
   the A/B pair if the supplies are separate).
 
 ### RS-485 bus
 
 ```
-Controllino RS-485 (Serial3)
+Controller RS-485 (CONTROLLINO port, or the A/B terminals of the module)
    A ───┬─────────┬─────────┬──── … ──┐
    B ───┼────┬────┼────┬────┼──── … ──┼──┐
         │    │    │    │    │         │  │
       drive 1   drive 2   drive 3 … drive N   [120 Ω across A/B at drive N]
 ```
 
-- **Daisy-chain** A to A, B to B, from the Controllino through every drive.
+- **Daisy-chain** A to A, B to B, from the controller through every drive.
   No star topology, no long stubs.
 - **120 Ω termination across A/B at the far end** (the last drive). Check
   your Controllino model's manual for whether its RS-485 port needs a
   resistor at the near end too.
 - If nothing answers at all, swap A and B once — labelling differs between
   vendors.
-- All drives on one bus share one baud rate (115200, see §3).
+- All drives on one bus share one baud rate (115200; 38400 on an Uno, see §3).
+
+### TTL-to-RS-485 module (Uno, ESP32, Mega)
+
+| Module pin | Uno / Nano | ESP32 | Mega 2560 | Notes |
+|---|---|---|---|---|
+| RO (receiver out) | 8 | GPIO 16 (RX2) | 19 (RX1) | to the board's RX |
+| DI (driver in) | 9 | GPIO 17 (TX2) | 18 (TX1) | from the board's TX |
+| DE + RE (tied together) | 7 | GPIO 4 | 7 | high = transmit; passed to `bus.begin(baud, dePin)` |
+| VCC / GND | 5V / GND | **3V3** / GND | 5V / GND | common ground with the drives |
+| A / B | bus A / B | bus A / B | bus A / B | |
+
+- The Uno's only hardware serial port is the USB one, so the module runs on
+  SoftwareSerial (pins 8/9) — reliable up to **38400 baud**. Set every drive
+  to 38400 (P41) and keep the sketch at 38400.
+- ESP32 pins are 3.3 V: use a 3.3 V module (MAX3485, SP3485), or put a level
+  shifter on RO if the module runs on 5 V.
+- Modules without DE/RE pins ("automatic direction") work as well: pass `-1`
+  as the DE pin. If a module echoes its own transmission back to RO, call
+  `bus.setEchoSuppression(true)`.
+- Separate DE and RE pins: `bus.begin(baud, dePin, rePin)`.
 
 ### Sensors
 
 - Wire limit switches and the origin switch to the drive's digital inputs as
   the drive manual shows (CW limit, CCW limit, origin). The library reads
   them from the drive's status word (bits 14, 15, 11) — nothing is wired to
-  the Controllino.
+  the controller board.
 - Set the input polarity on the drive (**P42**: 0 = PNP, 1 = NPN) to match the
   sensors; a wrong polarity shows as a permanently "active" limit.
 
-### Ethernet
+### PC link
 
-- Controllino → the same switch as the PC, or a direct cable. The library
-  uses a static IP (no DHCP), so pick a free address on the PC's subnet.
+- **CONTROLLINO / Mega + shield:** Ethernet to the same switch as the PC, or a
+  direct cable. Static IP (no DHCP): pick a free address on the PC's subnet.
+- **ESP32:** WiFi with a static IP (`WiFi.config`). Turn on the command
+  watchdog (`COMMAND_WATCHDOG_MS`), so motors stop if WiFi drops.
+- **Uno:** the USB cable (Serial Monitor at 57600 baud), or a MAX3232 module on
+  pins 0/1 to a PC COM port.
 
 ---
 
@@ -102,7 +135,7 @@ the drive is power-cycled.
 |---|---|---|---|
 | **P43** | **0** | fieldbus mode: 0 = RS-485 / Modbus-RTU, 1 = CANopen (factory default) | yes |
 | **P40** | 1, 2, 3 … | Modbus slave ID — unique per drive, consecutive from 1 (see §4) | yes |
-| **P41** | **7** | baud rate code; 7 = 115200, which `begin()` uses by default | yes |
+| **P41** | **7** (Uno: the code for 38400) | baud rate code; 7 = 115200, the speed of the CONTROLLINO, ESP32 and Mega examples. The Uno example uses 38400 — look up its code in the drive manual | yes |
 | **P42** | 0 or 1 | sensor input polarity: 0 = PNP, 1 = NPN (factory default 1) | yes |
 | **P17** | your choice (see below) | pulses per revolution = how many steps make 360° | yes |
 | **P19** | **7** for geared loads (default 2) | speed smoothness 0–10: rounds the corners of the accel/decel ramp (S-curve effect) so backlash is taken up softly | no |
@@ -144,21 +177,41 @@ is slave ID 3.
 
 ## 5. Configuring the sketch for your motors
 
-Open `File → Examples → JMCMotors → JMCMotors_6Motor` and edit the two
-"EDIT ME" blocks.
+Open `File → Examples → JMCMotors → JMCMotors_Controller` and work through
+its five "EDIT ME" steps.
 
-### Network
+### Board and PC link (step 1)
 
 ```cpp
-IPAddress CONTROLLINO_IP  (192, 168, 1, 101);   // this board, static
-uint16_t  CONTROLLINO_PORT = 8001;
-IPAddress PC_IP   (192, 168, 1, 100);           // where events go
-uint16_t  PC_PORT  = 8000;
-byte CONTROLLINO_MAC[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 };
+#define BOARD    BOARD_CONTROLLINO  // BOARD_CONTROLLINO, BOARD_ESP32, BOARD_UNO, BOARD_MEGA
+#define PC_LINK  LINK_NETWORK       // LINK_NETWORK (Ethernet / WiFi) or LINK_USB
+```
+
+Select the same board in Tools → Board; a mismatch stops the compile with a
+message saying which one to change. The Uno always uses `LINK_USB`.
+
+### RS-485 module pins (step 2 — ESP32, Uno, Mega)
+
+Edit only your board's block; the pins are the ones in the module table of §2.
+A module without DE/RE pins gets `-1`. The drive baud rate must match P41
+on every drive (115200; 38400 on the Uno). The CONTROLLINO has no block: its
+RS-485 port and its direction control are built in.
+
+### Network (step 3)
+
+```cpp
+#define BOARD_IP_ADDR      192, 168, 1, 101   // this board, static
+#define BOARD_UDP_PORT     8001
+#define PC_IP_ADDR         192, 168, 1, 100   // where events go
+#define PC_UDP_PORT        8000
+#define BOARD_MAC          0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01   // Ethernet boards
+#define WIFI_SSID          "your-network"                        // ESP32
+#define WIFI_PASSWORD      "your-password"
 ```
 
 One static IP and one unique MAC per board. `PC_IP` must be the PC's real
-address on that subnet — events only go there.
+address on that subnet — events only go there. `ONLY_ACCEPT_PC = true` makes
+the board ignore commands from any other address.
 
 ### Motor count
 
@@ -181,25 +234,38 @@ float GLOBAL_VELOCITY   = 0.3;   // rps  (0.3 rps = 18 RPM)
 float GLOBAL_HOMING_VEL = 0.3;   // rps
 
 // PER-MOTOR (PER_MOTOR_SETTINGS = true): one row per motor
-MotorSettings MOTOR[MOTOR_COUNT] = {
-  // velocity, accel, decel, homingVel
-  { 0.3, 0.5, 0.5, 0.3 },   // motor 1
-  { 0.3, 0.5, 0.5, 0.3 },   // motor 2
+const MotorSettings MOTOR[] PROGMEM = {     // in flash: no RAM cost on the Uno
+  // vel  acc  dec  hVel hZero hAcc  hOff  softMin softMax
+  { 0.3, 0.5, 0.5, 0.3, 0.0, 0.0,    0,      0,      0 },   // motor 1
+  { 0.3, 0.5, 0.5, 0.3, 0.0, 0.0,    0,  -1000,  50000 },   // motor 2: soft limits
   …
 };
 ```
 
 Values in the sketch are **re-applied on every boot and whenever a drive
 comes back online**, so they survive power failures. Values changed at
-runtime with `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `MC` last only
+runtime with `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `SL`, `WD`, `MC` last only
 until the next reboot — use them to find the right numbers, then either copy
 them into the sketch and re-flash, or send `SAVE` on a deployed unit to keep
 them without a USB cable. A saved block is ignored automatically once the
 sketch is re-flashed with different values, so the sketch is always the
 master copy. The table may have fewer rows than `MOTOR_COUNT`: motors
 without a row (or with a 0 in a column) use the `GLOBAL_*` values; the extra
-columns `homingZero`, `homingAccel` and `homingOff` map to `HVZ`, `HACC` and
-`HO`.
+columns `homingZero`, `homingAccel`, `homingOff`, `softMin`/`softMax` map
+to `HVZ`, `HACC`, `HO` and `SL` (0/0 = no soft limits). `SAVE` is not
+available on the Uno: change the sketch there.
+
+### Safety settings
+
+```cpp
+const uint16_t COMMAND_WATCHDOG_MS = (BOARD == BOARD_ESP32) ? 1000 : 0;   // stop every motor if no command for this long (0 = off)
+const bool     HARDWARE_WATCHDOG   = false;   // reboot the board if the firmware hangs
+```
+
+The command watchdog needs the PC to send something (e.g. `PING`) more often
+than the timeout; the ESP32 example turns it on at 1000 ms. Test the hardware
+watchdog once on your board before relying on it — some old Mega 2560
+bootloaders reboot in a loop after a watchdog reset.
 
 ### Homing offset and drive-unit quirk (optional)
 
@@ -221,14 +287,13 @@ columns `homingZero`, `homingAccel` and `homingOff` map to `HVZ`, `HACC` and
 
 ## 6. First power-up
 
-1. Power the drives, then the Controllino. Open the Arduino Serial Monitor at
-   115200 baud: `begin()` prints one line per slot,
-   `JMC motor 1 -> OK` / `JMC motor 2 -> TIMEOUT`, then `6 motor(s) detected`.
-2. On the PC, listen on `PC_PORT` (e.g. `ncat -u -l 8000`). Within a few
-   seconds of boot `Motor ready` must arrive. If it does not: check `PC_IP`,
-   the subnet, and the Windows Firewall (inbound UDP is blocked on networks
-   marked "Public").
-3. Send `IA` to `CONTROLLINO_IP:CONTROLLINO_PORT`. Expect
+1. Power the drives, then the controller board. Network boards print
+   `6 motor(s) detected` on the USB Serial Monitor (115200 baud) after boot.
+2. On the PC, listen on `PC_PORT` (e.g. `ncat -u -l 8000`) — or, on an Uno,
+   open the Serial Monitor at 57600. Within a few seconds of boot
+   `Motor ready` must arrive. If it does not: check `PC_IP`, the subnet, and
+   the Windows Firewall (inbound UDP is blocked on networks marked "Public").
+3. Send `VER` (firmware version and motor limit), then `IA`. Expect
    `Total motors detected: N of N` and `SUCCESS: All expected motors detected
    and initialized!`. A `NOT DETECTED (TIMEOUT)` line names the slot to fix
    (P43, ID, baud, wiring — §11).
@@ -245,7 +310,7 @@ power switch. Replace `1` with the motor's slot where shown.
 ### 7.1 Direction and basic motion
 
 ```
-V:0.3                 → Set Motor 1 V: 0.30
+V:0.3                 → Set V: M1=0.30 rps
 PR:4000               → OK              one revolution forward at P17 = 4000
 P:?                   → M1=4000
 PR:-4000              → OK              back
@@ -276,8 +341,8 @@ ACC:0.2               → Set ACC: M1=0.20 rps/s        (ACCA:0.2 for all; DEC /
 P:20000               → OK
 ```
 
-Listen and watch for backlash clunk at start/stop; lower `AD` or raise P19
-until it is gone. Then copy the values into the sketch.
+Listen and watch for backlash clunk at start/stop; lower `ACC`/`DEC` or raise
+P19 until it is gone. Then copy the values into the sketch.
 
 ### 7.4 Zero reference
 
@@ -302,6 +367,12 @@ H3:M1                 → Homing method 3 started for M1      (3 = origin switch
 LS:M1                 → LIMITS: M1:CW=0 CCW=0 SW=0 HOMED=1 MODE=HOM
 P:?                   → M1=0
 ```
+
+Directions: per the manual, the CW limit is the end reached moving towards
+negative positions ("left"), CCW the positive end. Confirm it once: jog slowly
+negative (`V:-0.1`, `VS:M1`) and check that pressing the CW switch stops it.
+Methods 1–4 home at most at 5 rps (300 r/min) and take `HO` ≥ 0; 5–12 allow up
+to 20 rps; only 9–12 take a negative `HO` — the controller refuses the rest.
 
 Methods 1/2 home to the CW/CCW limit switch, 3/4 to the origin switch
 (reversing at the CW/CCW limit if they meet it first), 5–12 are the fast
@@ -329,7 +400,14 @@ With the motor standing, press each switch by hand. The PC listening on
 reads active with the switch *released*, the polarity (P42) is wrong or the
 wire is open.
 
-### 7.7 Know the fault path
+### 7.7 Soft limits
+
+Jog or move the axis to each end of its safe travel and read `P:?`. Set the
+limits a little inside: `SL:M1=-500/48000`. Try `P:M1=60000` — it must answer
+`ERR:P M1 target 60000 outside soft limit -500..48000`. Then copy the values
+into the sketch's `softMin`/`softMax` columns.
+
+### 7.8 Know the fault path
 
 When a drive faults you will see `EVENT:FAULT:M1 ST=… ERR=… <name>` on
 `PC_PORT`. The routine is: `SD:M1` to read the decoded cause, fix it (jam,
@@ -337,9 +415,9 @@ load, wiring, supply), then `R:M1`; `EVENT:FAULT_CLEARED:M1` confirms the
 drive is back. Make sure your PC-side application handles this sequence
 before the installation goes live.
 
-### 7.8 Write it down
+### 7.9 Write it down
 
-Copy the final `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO` values into the
+Copy the final `V`, `ACC`, `DEC`, `HV`, `HVZ`, `HACC`, `HO`, `SL` values into the
 sketch's per-motor table so they are the master configuration, and re-flash.
 On a unit that is already deployed and awkward to reach, `SAVE` keeps the
 same values in EEPROM without a cable; `SAVE:?` confirms they are active.
@@ -368,15 +446,19 @@ Register scaling (×10 per the JMC Modbus manual) is handled inside the library
 - **Synchronised launch is broadcast-based**: when a `P:` command addresses
   every motor (and always for `PA` and `VSA`), the arm + start are sent as two
   single broadcast frames (slave 0) — all drives start in the same instant,
-  with no per-motor stagger even at 32 motors. Partial selections launch per
-  motor (~5 ms apart each).
+  with no per-motor stagger even at 32 motors. Partial selections get their
+  start edges back to back (about 2 ms per motor at 115200 baud).
+- **Synchronised arrival** (`PS`, not on the Uno): speeds and ramps are scaled
+  so every selected axis also *arrives* together.
 - Monitor sweep time scales with the configured count (≈ count × 13 ms), so
   **set `setMotorCount` to the number of drives actually installed**: 6 motors
   → limit events in <100 ms; 32 motors → <450 ms.
 - Boot stays fast with missing drives: every slot gets a 12 ms presence probe
   first; only responding drives get the full initialisation.
-- Bus timing: 115200 baud, 30 ms response timeout with one retry per
-  transaction, 350 µs inter-frame gap.
+- Bus timing: 115200 baud, a response timeout of 30 ms plus the frame time,
+  one retry per transaction, an inter-frame gap of 3.5 characters (at least
+  350 µs). Slower baud rates scale these automatically.
+- Up to 32 motors on CONTROLLINO, ESP32 and Mega; 6 on an Uno.
 
 ---
 
@@ -414,8 +496,10 @@ the limit.
    library pushes it as `EVENT:FAULT`.
 3. **Power cycle resets the counter.** A drive that loses power comes back at
    position 0 (`EVENT:ONLINE … (re-initialised)`). Re-home or `ZO` before
-   trusting coordinates. The Controllino rebooting (`X`) does not touch the
+   trusting coordinates. The controller rebooting (`X`) does not touch the
    drives' counters.
+5. **Soft limits** (`SL`) keep commanded moves inside a window you choose, on
+   top of the drives' hardware limit switches.
 4. **Practical rule:** treat ±2 billion steps as the absolute envelope, set
    your working zero with `Z`/`ZO` at commissioning, and use velocity mode for
    anything that spins forever.
@@ -426,21 +510,28 @@ the limit.
 
 | Symptom | Check | Fix |
 |---|---|---|
-| No `Motor ready`, no replies at all | `PC_IP` is the PC's real IP on the Controllino's subnet; Windows Firewall allows inbound UDP for your tool | fix the address / allow the app; reset the Controllino while listening on `PC_PORT` |
+| No `Motor ready`, no replies at all | `PC_IP` is the PC's real IP on the board's subnet; Windows Firewall allows inbound UDP for your tool; `ONLY_ACCEPT_PC` and the PC's address | fix the address / allow the app; reset the board while listening on `PC_PORT` |
+| Uno: garbage or nothing in the Serial Monitor | baud 57600, line ending "Newline" or "Both NL & CR" | set both in the Serial Monitor |
+| Uno / ESP32: every motor `NOT DETECTED` | RO/DI swapped? DE pin number? module powered? drives at the sketch's baud (Uno: 38400)? a TTL-to-RS-232 module by mistake? | check the module table in §2; it must be an RS-485 module |
 | Replies arrive but no `EVENT:` messages | events go **only** to `PC_IP:PC_PORT`, replies also echo to the sender | listen on `PC_PORT` |
-| `INVALID COMMAND` | head must be upper case; one command per packet | `P:1000`, not `p:1000` |
-| `I`: `NOT DETECTED (TIMEOUT)` on every motor | P43 = 0 on each drive? baud P41 = 7? A/B swapped? termination? | set P43 = 0 and **restart the drive**; swap A/B once; add 120 Ω at the far end |
+| `ERR:unknown command …` | typo in the head; one command per packet / line | see PROTOCOL.md |
+| `ERR:… not available on this board` | the Uno leaves out `PS`, `SAVE`, `SD`, `DG`, `BS`, `ZS` | see the README's board differences |
+| `I`: `NOT DETECTED (TIMEOUT)` on every motor | P43 = 0 on each drive? baud P41 matches the sketch? A/B swapped? termination? | set P43 = 0 and **restart the drive**; swap A/B once; add 120 Ω at the far end |
 | `NOT DETECTED` on one motor only | its slave ID (P40 / rotary) matches its slot? duplicate ID? power? | set a unique ID 1..N, restart the drive |
 | `NOT DETECTED (CRC)` or `BADFRAME` | noise on the bus, missing termination, long stubs | shielded twisted pair, terminate, common ground |
 | Motor replies `OK` but does not move | `DG:n` → `vel6081=0,0`? `mode6061` not 1? `err1001` non-zero? `WRITE10=EXCEPTION`? | send `V`, `R`, or check the drive's enable input; report the `DG` line |
 | Motor runs 10× too fast | drive P45 velocity unit | `jmc.setDriveP45(0)` in the sketch |
+| Negative moves do nothing (or stop at once), positive ones work | `LS:Mn` shows `CW=1` with nothing pressed — the CW limit is the negative end (manual §6.3) and the drive refuses to move into an active limit | set P42 to match PNP/NPN sensors, check the CW input wiring; then `PR:-4000` must move |
+| `ERR:H… HV/HVZ above 5 rps` / `negative HO needs H9..H12` | the manual's homing limits: methods 1–4 max 300 r/min, negative offset only with 9–12 | lower `HV`/`HVZ`, or use a method that allows it |
 | A limit shows `*** ACTIVE ***` with nothing pressed | P42 polarity, or the input wire is open | set P42 to match PNP/NPN sensors; check wiring |
 | `EVENT:HOMING_ERROR` after `H<n>` | the method's switch is not wired or has the wrong polarity, `HV` too fast for the method's limit, `HO` pushes past a limit | check `LS` while pressing the switches, fix P42, lower `HV`, `R:…`, retry |
-| `EVENT:FAULT … OVERPOS` on normal moves | mechanism binds, ramps too steep, P16 too tight | lower `AD`, raise P19, check the load, adjust P16 |
+| `EVENT:FAULT … OVERPOS` on normal moves | mechanism binds, ramps too steep, P16 too tight | lower `ACC`/`DEC`, raise P19, check the load, adjust P16 |
 | `EVENT:FAULT … CURRENT` at start | stall, short, wrong motor phase wiring | check the motor cable and load |
 | `EVENT:OFFLINE` / `ONLINE` flapping | loose RS-485 connector, marginal power | reseat connectors; check the motor supply under load |
 | `P` after `VS` answers late or not at all | the controller is braking the jog on the `DEC` ramp first (`OK` is sent when the move starts) | send `B` before repositioning, or use a steeper decel |
-| Settings forgotten after power loss | `V`/`AD`/`HV`/`HO`/`MC` are runtime only | put them in the sketch |
+| Settings forgotten after power loss | runtime changes last until reboot | put them in the sketch, or `SAVE` (not on the Uno) |
+| `ERR:… Mn not accepted (TIMEOUT)` | that drive missed a frame while the command was sent (wiring, termination, power, noise) — a coordinated move was not started | check that drive; repeat the command; `DG:Mn` for details |
+| Motors stop on their own with `EVENT:WATCHDOG` | the command watchdog (`WD`) expired | have the PC send `PING` more often than the `WD` time |
 | Positions are 0 after a drive power cycle | the drive's counter reset | re-home or `ZO:<known value>` |
 | `L:2` loosened motor 1 | selector commands are positional | `L:,1` for motor 2 |
 
@@ -454,4 +545,9 @@ direct calls (`moveToPosition`, `performHoming`, `getDetailedStatus`,
 (`readHolding`, `writeSingle`, `writeMultiple`). Every call returns a
 `JMCResult` (`JMC_OK`, `JMC_ERR_TIMEOUT`, `JMC_ERR_CRC`, `JMC_ERR_EXCEPTION`,
 `JMC_ERR_BADFRAME`, `JMC_ERR_PARAM`) so comms failures are never silent. See
-[src/JMCMotors.h](../src/JMCMotors.h) for the full declarations.
+[src/JMCMotors.h](../src/JMCMotors.h) for the full declarations and the
+`JMCMotors_DirectAPI` example, which compiles on every supported board.
+
+Your own PC link: derive from `JMCLink` (three functions: `receive`, `reply`,
+`event`) to carry the commands over anything else (CAN, Bluetooth, MQTT),
+then pass it to `JMCController jmc(bus, myLink)`.
